@@ -1,0 +1,27 @@
+kind = "web"
+previewPath = "/"
+title = "Site Principal"
+version = "1.0.0"
+id = "artifacts/site-principal"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 19466
+
+[services.development]
+run = "pnpm --filter @workspace/site-principal run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/site-principal", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/site-principal/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "19466"
+BASE_PATH = "/"

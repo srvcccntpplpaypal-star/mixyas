@@ -1,0 +1,399 @@
+openapi: 3.1.0
+info:
+  # Do not change the title, if the title changes, the import paths will be broken
+  title: Api
+  version: 0.1.0
+  description: API du site professionnel avec inscription, portefeuille et analytics
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+    description: Health operations
+  - name: auth
+    description: Authentification et inscription
+  - name: user
+    description: Données utilisateur
+  - name: analytics
+    description: Tracking des visites
+  - name: admin
+    description: Tableau de bord administrateur
+
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      description: Returns server health status
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
+  /auth/register:
+    post:
+      operationId: registerUser
+      tags: [auth]
+      summary: Inscription d'un nouvel utilisateur
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserRegisterInput"
+      responses:
+        "201":
+          description: Utilisateur créé
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "400":
+          description: Données invalides
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Email déjà utilisé
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /auth/login:
+    post:
+      operationId: loginUser
+      tags: [auth]
+      summary: Connexion utilisateur
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserLoginInput"
+      responses:
+        "200":
+          description: Connexion réussie
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "401":
+          description: Identifiants incorrects
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /auth/logout:
+    post:
+      operationId: logoutUser
+      tags: [auth]
+      summary: Déconnexion
+      responses:
+        "200":
+          description: Déconnecté
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  /user/me:
+    get:
+      operationId: getCurrentUser
+      tags: [user]
+      summary: Données de l'utilisateur connecté
+      responses:
+        "200":
+          description: Données utilisateur
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "401":
+          description: Non authentifié
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /user/wallet:
+    get:
+      operationId: getUserWallet
+      tags: [user]
+      summary: Portefeuille de l'utilisateur
+      responses:
+        "200":
+          description: Données du portefeuille
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Wallet"
+        "401":
+          description: Non authentifié
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /analytics/track:
+    post:
+      operationId: trackVisit
+      tags: [analytics]
+      summary: Enregistrer une visite (IP, navigateur, page)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VisitInput"
+      responses:
+        "200":
+          description: Visite enregistrée
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  /admin/stats:
+    get:
+      operationId: getAdminStats
+      tags: [admin]
+      summary: Statistiques globales (admin)
+      responses:
+        "200":
+          description: Statistiques
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminStats"
+        "403":
+          description: Accès refusé
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /admin/users:
+    get:
+      operationId: getAdminUsers
+      tags: [admin]
+      summary: Liste de tous les utilisateurs (admin)
+      responses:
+        "200":
+          description: Liste des utilisateurs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AdminUser"
+        "403":
+          description: Accès refusé
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /admin/visits:
+    get:
+      operationId: getAdminVisits
+      tags: [admin]
+      summary: Liste des visites trackées (admin)
+      responses:
+        "200":
+          description: Liste des visites
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Visit"
+        "403":
+          description: Accès refusé
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+components:
+  schemas:
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+      required:
+        - status
+
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+
+    SuccessResponse:
+      type: object
+      required: [success]
+      properties:
+        success:
+          type: boolean
+        message:
+          type: ["string", "null"]
+
+    UserRegisterInput:
+      type: object
+      required: [firstName, lastName, email, phone, countryCode, country, password]
+      properties:
+        firstName:
+          type: string
+          minLength: 1
+        lastName:
+          type: string
+          minLength: 1
+        email:
+          type: string
+          description: "Adresse email"
+        phone:
+          type: string
+          minLength: 5
+        countryCode:
+          type: string
+          description: "Indicatif téléphonique ex: +225"
+          minLength: 2
+        country:
+          type: string
+          minLength: 2
+        password:
+          type: string
+          minLength: 6
+
+    UserLoginInput:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          description: "Adresse email"
+        password:
+          type: string
+
+    AuthResponse:
+      type: object
+      required: [user, token]
+      properties:
+        user:
+          $ref: "#/components/schemas/User"
+        token:
+          type: string
+
+    User:
+      type: object
+      required: [id, firstName, lastName, email, phone, countryCode, country, createdAt]
+      properties:
+        id:
+          type: integer
+        firstName:
+          type: string
+        lastName:
+          type: string
+        email:
+          type: string
+        phone:
+          type: string
+        countryCode:
+          type: string
+        country:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+
+    Wallet:
+      type: object
+      required: [userId, balance, currency]
+      properties:
+        userId:
+          type: integer
+        balance:
+          type: number
+        currency:
+          type: string
+
+    VisitInput:
+      type: object
+      required: [page, userAgent]
+      properties:
+        page:
+          type: string
+        userAgent:
+          type: string
+        referrer:
+          type: ["string", "null"]
+        userId:
+          type: ["integer", "null"]
+
+    Visit:
+      type: object
+      required: [id, ip, page, userAgent, createdAt]
+      properties:
+        id:
+          type: integer
+        ip:
+          type: ["string", "null"]
+        page:
+          type: string
+        userAgent:
+          type: string
+        referrer:
+          type: ["string", "null"]
+        userId:
+          type: ["integer", "null"]
+        createdAt:
+          type: string
+          format: date-time
+
+    AdminUser:
+      type: object
+      required: [id, firstName, lastName, email, phone, countryCode, country, walletBalance, createdAt]
+      properties:
+        id:
+          type: integer
+        firstName:
+          type: string
+        lastName:
+          type: string
+        email:
+          type: string
+        phone:
+          type: string
+        countryCode:
+          type: string
+        country:
+          type: string
+        walletBalance:
+          type: number
+        createdAt:
+          type: string
+          format: date-time
+
+    AdminStats:
+      type: object
+      required: [totalUsers, totalVisits, totalWalletBalance, usersToday, visitsToday]
+      properties:
+        totalUsers:
+          type: integer
+        totalVisits:
+          type: integer
+        totalWalletBalance:
+          type: number
+        usersToday:
+          type: integer
+        visitsToday:
+          type: integer
