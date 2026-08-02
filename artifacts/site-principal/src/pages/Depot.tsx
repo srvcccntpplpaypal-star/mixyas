@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, type ChangeEvent } from "react";
 import { useLocation, Link } from "wouter";
 import { PageWrapper } from "@/components/layout/PageWrapper";
 import { Button } from "@/components/ui/button";
@@ -42,6 +42,8 @@ export default function Depot() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [proofFile, setProofFile] = useState<File | null>(null);
+  const [proofPreview, setProofPreview] = useState<string | null>(null);
 
   useEffect(() => {
     if (!localStorage.getItem("authToken")) { setLocation("/connexion"); return; }
@@ -61,13 +63,65 @@ export default function Depot() {
     }
   };
 
+  const handleFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0] ?? null;
+    if (!file) {
+      setProofFile(null);
+      setProofPreview(null);
+      return;
+    }
+    if (!file.type.startsWith("image/")) {
+      setError("Veuillez sélectionner une image valide (PNG, JPG, WEBP).");
+      return;
+    }
+
+    const previewUrl = URL.createObjectURL(file);
+    try {
+      const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const image = new Image();
+        image.onload = () => resolve(image);
+        image.onerror = () => reject(new Error("Impossible de traiter cette image."));
+        image.src = previewUrl;
+      });
+
+      const canvas = document.createElement("canvas");
+      const maxDimension = 1200;
+      const scale = Math.min(1, maxDimension / Math.max(img.width, img.height));
+      canvas.width = Math.max(1, Math.floor(img.width * scale));
+      canvas.height = Math.max(1, Math.floor(img.height * scale));
+      const ctx = canvas.getContext("2d");
+      if (!ctx) throw new Error("Canvas non pris en charge.");
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+      const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.82));
+      const compressedFile = blob ? new File([blob], file.name.replace(/\.[^.]+$/, ".jpg"), { type: "image/jpeg" }) : file;
+      setProofFile(compressedFile);
+      setProofPreview(previewUrl);
+      setError("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Impossible de compresser l’image.");
+      setProofFile(null);
+      setProofPreview(null);
+    }
+  };
+
   const handleSubmit = async () => {
     setError("");
     setSubmitting(true);
     try {
-      await apiFetch("/deposit/submit", { method: "POST", body: JSON.stringify({ referenceCode: refCode }) });
+      if (!proofFile) {
+        setError("Veuillez joindre une preuve de paiement sous forme d'image.");
+        setSubmitting(false);
+        return;
+      }
+      const formData = new FormData();
+      formData.append("referenceCode", refCode);
+      formData.append("proofImage", proofFile);
+      await apiFetch("/deposit/submit", { method: "POST", body: formData });
       setSuccess(true);
       setRefCode("");
+      setProofFile(null);
+      setProofPreview(null);
       const h = await apiFetch<DepositRecord[]>("/deposit/history");
       setHistory(h);
     } catch (e) {
@@ -185,6 +239,17 @@ export default function Depot() {
                 />
               </div>
 
+              <div className="space-y-2">
+                <Label>Preuve de paiement (image compressée) *</Label>
+                <Input type="file" accept="image/*" onChange={handleFileChange} className="file:mr-4 file:rounded-sm file:border-0 file:bg-primary file:px-3 file:py-2 file:text-sm file:font-semibold" />
+                <p className="text-xs text-muted-foreground">Ajoutez une capture ou une photo du reçu. L’image sera envoyée automatiquement avec votre dépôt.</p>
+                {proofPreview && (
+                  <div className="rounded-sm border border-dashed border-primary/30 p-2">
+                    <img src={proofPreview} alt="Aperçu de la preuve de dépôt" className="max-h-48 w-full rounded-sm object-contain" />
+                  </div>
+                )}
+              </div>
+
               {error && (
                 <div className="flex items-center gap-2 text-red-600 text-sm bg-red-50 p-3 rounded-sm">
                   <AlertCircle className="w-4 h-4" /> {error}
@@ -194,7 +259,7 @@ export default function Depot() {
               <Button
                 className="w-full font-bold uppercase tracking-widest h-12"
                 onClick={handleSubmit}
-                disabled={refCode.length < 3 || submitting}
+                disabled={refCode.length < 3 || !proofFile || submitting}
               >
                 {submitting ? "Soumission..." : "Valider mon dépôt de 5 000 F"}
               </Button>

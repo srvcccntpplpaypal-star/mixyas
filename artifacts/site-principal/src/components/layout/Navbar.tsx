@@ -39,7 +39,7 @@ export function Navbar() {
 
   return (
     <header className="sticky top-0 z-40 w-full border-b-4 border-primary bg-[#123274] shadow-lg">
-      <div className="container mx-auto flex h-20 items-center justify-between px-4 sm:px-6">
+      <div className="container mx-auto flex h-20 items-center justify-between px-3 sm:px-6">
 
         {/* Logo YAS */}
         <div
@@ -56,13 +56,13 @@ export function Navbar() {
               draggable={false}
             />
           </div>
-          <div className="flex flex-col">
-            <span className="text-white font-black text-xl leading-none tracking-widest uppercase">YAS Service</span>
-            <span className="text-[#FFD700] text-[9px] tracking-[0.3em] uppercase mt-0.5">Plateforme Officielle</span>
+          <div className="flex flex-col min-w-0">
+            <span className="text-white font-black text-sm sm:text-xl leading-none tracking-widest uppercase">YAS Service</span>
+            <span className="text-[#FFD700] text-[8px] sm:text-[9px] tracking-[0.2em] sm:tracking-[0.3em] uppercase mt-0.5">Plateforme Officielle</span>
           </div>
         </div>
 
-        <nav className="hidden md:flex items-center gap-8">
+        <nav className="hidden lg:flex items-center gap-8">
           <Link href="/" className="text-white/80 text-sm font-semibold tracking-wider hover:text-[#FFD700] transition-colors uppercase">
             Accueil
           </Link>
@@ -79,7 +79,7 @@ export function Navbar() {
           </a>
         </nav>
 
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-2 sm:gap-4">
           {isLoggedIn ? (
             <Link href="/dashboard" className="inline-flex">
               <Button className="bg-[#FFD700] text-[#123274] hover:bg-[#FFD700]/90 font-bold tracking-wider uppercase border-0">
@@ -92,7 +92,7 @@ export function Navbar() {
                 Connexion
               </Link>
               <Link href="/inscription" className="inline-flex">
-                <Button className="bg-[#FFD700] text-[#123274] hover:bg-[#FFD700]/90 font-bold tracking-wider uppercase border-0">
+                <Button className="bg-[#FFD700] text-[#123274] hover:bg-[#FFD700]/90 font-bold tracking-wider uppercase border-0 text-xs sm:text-sm px-3 sm:px-4 text-xs sm:text-sm px-3 sm:px-4">
                   Ouvrir un compte
                 </Button>
               </Link>

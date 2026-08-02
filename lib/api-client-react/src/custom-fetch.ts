@@ -349,6 +349,13 @@ export async function customFetch<T = unknown>(
     headers.set("accept", DEFAULT_JSON_ACCEPT);
   }
 
+  if (typeof window !== "undefined") {
+    const adminKey = window.localStorage.getItem("adminAuthKey");
+    if (adminKey && !headers.has("x-admin-key")) {
+      headers.set("x-admin-key", adminKey);
+    }
+  }
+
   // Attach bearer token when an auth getter is configured and no
   // Authorization header has been explicitly provided.
   if (_authTokenGetter && !headers.has("authorization")) {

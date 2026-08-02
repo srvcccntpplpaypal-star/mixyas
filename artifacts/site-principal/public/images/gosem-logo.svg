@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 220" role="img" aria-label="Logo Gosem sponsor">
+  <rect width="640" height="220" rx="28" fill="#f6fff9"/>
+  <circle cx="120" cy="110" r="62" fill="#1f9d4b"/>
+  <path d="M92 110l24 24 42-44" fill="none" stroke="#ffffff" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="220" y="108" font-family="Arial, Helvetica, sans-serif" font-size="66" font-weight="700" fill="#0f4f27">GOSEM</text>
+  <text x="220" y="148" font-family="Arial, Helvetica, sans-serif" font-size="24" font-weight="600" letter-spacing="3" fill="#2b8a3e">SPONSOR OFFICIEL</text>
+</svg>

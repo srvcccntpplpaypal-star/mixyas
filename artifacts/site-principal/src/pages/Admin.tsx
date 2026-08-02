@@ -11,10 +11,10 @@ import { apiFetch } from "@/lib/api";
 import { formatCurrency } from "@/lib/utils";
 import {
   Users, Activity, Wallet, ShieldAlert, ArrowLeft, Shield, Briefcase,
-  CreditCard, Settings, CheckCircle2, XCircle, Clock, Eye, EyeOff,
+  CreditCard, Settings, CheckCircle2, XCircle, Clock, Eye, EyeOff, MessageSquare,
 } from "lucide-react";
 
-type Tab = "stats" | "users" | "kyc" | "tasks" | "completions" | "deposits" | "settings" | "visits";
+type Tab = "stats" | "users" | "kyc" | "tasks" | "completions" | "deposits" | "settings" | "visits" | "comments";
 
 interface KycEntry {
   id: number; userId: number; userEmail: string; userFirstName: string; userLastName: string;
@@ -39,6 +39,25 @@ interface CompletionEntry {
 interface DepositEntry {
   id: number; userId: number; userEmail: string; userFirstName: string; userLastName: string;
   amount: number; referenceCode: string; status: string; adminNote: string | null; createdAt: string;
+}
+
+interface UserDetailEntry {
+  user: {
+    id: number; firstName: string; lastName: string; email: string; phone: string; countryCode: string; country: string; createdAt: string;
+  };
+  wallet: { id: number; balance: number; currency: string } | null;
+  kyc: { id: number; fullName: string; status: string; adminNote: string | null; createdAt: string } | null;
+}
+
+interface CommentEntry {
+  id: number;
+  authorName: string;
+  role: string;
+  avatarInitials: string;
+  content: string;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
 }
 
 const StatusBadge = ({ status }: { status: string }) => {
@@ -66,11 +85,15 @@ const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: "deposits", label: "Dépôts", icon: <CreditCard className="w-4 h-4" /> },
   { id: "settings", label: "Paramètres", icon: <Settings className="w-4 h-4" /> },
   { id: "visits", label: "Visites", icon: <Activity className="w-4 h-4" /> },
+  { id: "comments", label: "Commentaires", icon: <MessageSquare className="w-4 h-4" /> },
 ];
 
 export default function Admin() {
   const [_location, setLocation] = useLocation();
   const [tab, setTab] = useState<Tab>("stats");
+  const [adminAuthenticated, setAdminAuthenticated] = useState(false);
+  const [adminPassword, setAdminPassword] = useState("");
+  const [adminError, setAdminError] = useState("");
 
   // Existing
   const { data: stats, isLoading: statsLoading } = useGetAdminStats();
@@ -82,6 +105,7 @@ export default function Admin() {
   const [taskList, setTaskList] = useState<TaskEntry[]>([]);
   const [completionList, setCompletionList] = useState<CompletionEntry[]>([]);
   const [depositList, setDepositList] = useState<DepositEntry[]>([]);
+  const [commentList, setCommentList] = useState<CommentEntry[]>([]);
 
   // Settings
   const [settingsPwd, setSettingsPwd] = useState("");
@@ -91,23 +115,64 @@ export default function Admin() {
   const [settingsError, setSettingsError] = useState("");
   const [showPwd, setShowPwd] = useState(false);
 
+  // Comments form
+  const [commentAuthor, setCommentAuthor] = useState("");
+  const [commentRole, setCommentRole] = useState("Client");
+  const [commentContent, setCommentContent] = useState("");
+  const [commentActive, setCommentActive] = useState(true);
+  const [commentEditingId, setCommentEditingId] = useState<number | null>(null);
+
   // Detail view
   const [kycDetail, setKycDetail] = useState<KycEntry | null>(null);
   const [completionDetail, setCompletionDetail] = useState<CompletionEntry | null>(null);
+  const [userDetail, setUserDetail] = useState<UserDetailEntry | null>(null);
+  const [editingUserId, setEditingUserId] = useState<number | null>(null);
+  const [userForm, setUserForm] = useState({ firstName: "", lastName: "", email: "", phone: "", countryCode: "", country: "" });
 
   useEffect(() => {
-    if (!localStorage.getItem("authToken")) setLocation("/connexion");
+    const storedAdminKey = localStorage.getItem("adminAuthKey");
+    if (!localStorage.getItem("authToken")) {
+      setLocation("/connexion");
+      return;
+    }
+    if (storedAdminKey) {
+      setAdminAuthenticated(true);
+      setAdminPassword(storedAdminKey);
+      return;
+    }
+    setAdminAuthenticated(false);
   }, [setLocation]);
 
   useEffect(() => {
     if (tab === "kyc" && kycList.length === 0) loadKyc();
     if ((tab === "completions") && completionList.length === 0) loadCompletions();
     if (tab === "deposits" && depositList.length === 0) loadDeposits();
+    if (tab === "comments" && commentList.length === 0) loadComments();
   }, [tab]);
 
   const loadKyc = () => apiFetch<KycEntry[]>("/admin/kyc").then(setKycList).catch(() => {});
   const loadCompletions = () => apiFetch<CompletionEntry[]>("/admin/task-completions").then(setCompletionList).catch(() => {});
   const loadDeposits = () => apiFetch<DepositEntry[]>("/admin/deposits").then(setDepositList).catch(() => {});
+  const loadComments = () => apiFetch<CommentEntry[]>("/admin/comments").then(setCommentList).catch(() => {});
+
+  const authenticateAdmin = async () => {
+    setAdminError("");
+    try {
+      await apiFetch("/admin/stats", { headers: { "x-admin-key": adminPassword } });
+      localStorage.setItem("adminAuthKey", adminPassword);
+      setAdminAuthenticated(true);
+      setTab("stats");
+    } catch {
+      setAdminError("Mot de passe administrateur invalide.");
+    }
+  };
+
+  const logoutAdmin = () => {
+    localStorage.removeItem("adminAuthKey");
+    setAdminAuthenticated(false);
+    setAdminPassword("");
+    setAdminError("");
+  };
 
   const kycDecision = async (id: number, action: "approuve" | "rejete", note?: string) => {
     await apiFetch(`/admin/kyc/${id}/decision`, { method: "POST", body: JSON.stringify({ action, adminNote: note }) });
@@ -152,6 +217,120 @@ export default function Admin() {
     } catch (e) { setSettingsError(e instanceof Error ? e.message : "Erreur."); }
   };
 
+  const saveComment = async () => {
+    if (!commentAuthor.trim() || !commentContent.trim()) return;
+    try {
+      const payload = {
+        authorName: commentAuthor.trim(),
+        role: commentRole.trim() || "Client",
+        avatarInitials: commentAuthor.trim().split(/\s+/).slice(0, 2).map((w) => w[0]?.toUpperCase() ?? "").join(""),
+        content: commentContent.trim(),
+        isActive: commentActive,
+      };
+      if (commentEditingId) {
+        await apiFetch(`/admin/comments/${commentEditingId}`, { method: "PATCH", body: JSON.stringify(payload) });
+      } else {
+        await apiFetch("/admin/comments", { method: "POST", body: JSON.stringify(payload) });
+      }
+      setCommentAuthor(""); setCommentRole("Client"); setCommentContent(""); setCommentActive(true); setCommentEditingId(null);
+      await loadComments();
+    } catch (e) {
+      setSettingsError(e instanceof Error ? e.message : "Erreur lors de la sauvegarde du commentaire.");
+    }
+  };
+
+  const editComment = (comment: CommentEntry) => {
+    setCommentEditingId(comment.id);
+    setCommentAuthor(comment.authorName);
+    setCommentRole(comment.role);
+    setCommentContent(comment.content);
+    setCommentActive(comment.isActive);
+    setTab("comments");
+  };
+
+  const deleteComment = async (id: number) => {
+    try {
+      await apiFetch(`/admin/comments/${id}`, { method: "DELETE" });
+      await loadComments();
+    } catch (e) {
+      setSettingsError(e instanceof Error ? e.message : "Erreur lors de la suppression du commentaire.");
+    }
+  };
+
+  const openUserDetail = async (userId: number) => {
+    try {
+      const detail = await apiFetch<UserDetailEntry>(`/admin/users/${userId}`);
+      setUserDetail(detail);
+      setEditingUserId(userId);
+      setUserForm({
+        firstName: detail.user.firstName,
+        lastName: detail.user.lastName,
+        email: detail.user.email,
+        phone: detail.user.phone,
+        countryCode: detail.user.countryCode,
+        country: detail.user.country,
+      });
+    } catch (e) {
+      setSettingsError(e instanceof Error ? e.message : "Erreur lors du chargement du profil utilisateur.");
+    }
+  };
+
+  const saveUser = async () => {
+    if (!editingUserId) return;
+    try {
+      await apiFetch(`/admin/users/${editingUserId}`, { method: "PATCH", body: JSON.stringify(userForm) });
+      await loadUsers();
+      setUserDetail(null);
+      setEditingUserId(null);
+      setUserForm({ firstName: "", lastName: "", email: "", phone: "", countryCode: "", country: "" });
+    } catch (e) {
+      setSettingsError(e instanceof Error ? e.message : "Erreur lors de la modification du profil.");
+    }
+  };
+
+  const deleteUser = async (userId: number) => {
+    try {
+      await apiFetch(`/admin/users/${userId}`, { method: "DELETE" });
+      await loadUsers();
+      if (userDetail?.user.id === userId) setUserDetail(null);
+    } catch (e) {
+      setSettingsError(e instanceof Error ? e.message : "Erreur lors de la suppression du compte.");
+    }
+  };
+
+  const loadUsers = async () => {
+    const data = await apiFetch<Array<{ id: number; firstName: string; lastName: string; email: string; phone: string; countryCode: string; country: string; walletBalance: number; createdAt: string }>>("/admin/users");
+    // Reuse the existing hooks state by reloading via the generated hook is not available here, so we keep local state via the API response.
+    (window as unknown as { __adminUsers?: typeof data }).__adminUsers = data;
+  };
+
+  if (!adminAuthenticated) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4 py-10">
+        <Card className="w-full max-w-md border-0 shadow-lg">
+          <CardHeader className="border-b px-5 py-4">
+            <CardTitle className="text-sm uppercase tracking-widest">Connexion espace PDG</CardTitle>
+          </CardHeader>
+          <CardContent className="p-6 space-y-4">
+            <p className="text-sm text-muted-foreground">Saisissez le mot de passe administrateur pour accéder à la gestion des utilisateurs, KYC et commentaires publics.</p>
+            <div className="space-y-2">
+              <Label>Mot de passe administrateur</Label>
+              <Input
+                type="password"
+                placeholder="••••••"
+                value={adminPassword}
+                onChange={(e) => setAdminPassword(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && void authenticateAdmin()}
+              />
+            </div>
+            {adminError && <p className="text-sm text-red-600">{adminError}</p>}
+            <Button className="w-full font-bold uppercase tracking-widest" onClick={() => void authenticateAdmin()}>Accéder au tableau de bord</Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   if (statsLoading || usersLoading || visitsLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
@@ -169,13 +348,22 @@ export default function Admin() {
             <ShieldAlert className="w-5 h-5" />
             <span className="font-bold tracking-widest uppercase text-sm">Console PDG — YAS Service</span>
           </div>
-          <Button
-            variant="outline" size="sm"
-            onClick={() => setLocation("/")}
-            className="border-white/20 text-white hover:bg-white hover:text-foreground text-xs uppercase tracking-widest"
-          >
-            <ArrowLeft className="w-4 h-4 mr-2" /> Site
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline" size="sm"
+              onClick={() => setLocation("/")}
+              className="border-white/20 text-white hover:bg-white hover:text-foreground text-xs uppercase tracking-widest"
+            >
+              <ArrowLeft className="w-4 h-4 mr-2" /> Site
+            </Button>
+            <Button
+              variant="ghost" size="sm"
+              onClick={logoutAdmin}
+              className="border-white/20 text-white hover:bg-white hover:text-foreground text-xs uppercase tracking-widest"
+            >
+              Déconnexion
+            </Button>
+          </div>
         </div>
       </header>
 
@@ -245,6 +433,12 @@ export default function Admin() {
                       <TableCell className="text-sm">{u.country}</TableCell>
                       <TableCell className="font-bold text-green-700">{formatCurrency(u.walletBalance)}</TableCell>
                       <TableCell className="text-xs text-muted-foreground">{new Date(u.createdAt).toLocaleString("fr-FR")}</TableCell>
+                      <TableCell>
+                        <div className="flex gap-2">
+                          <Button size="sm" variant="outline" className="text-xs" onClick={() => openUserDetail(u.id)}>Voir</Button>
+                          <Button size="sm" variant="destructive" className="text-xs" onClick={() => deleteUser(u.id)}>Supprimer</Button>
+                        </div>
+                      </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -541,6 +735,97 @@ export default function Admin() {
           </div>
         )}
 
+        {/* ── COMMENTAIRES ─────────────────────────────────────── */}
+        {tab === "comments" && (
+          <div className="grid grid-cols-1 xl:grid-cols-[1.1fr_0.9fr] gap-6">
+            <Card className="border-0 shadow-sm">
+              <CardHeader className="border-b px-5 py-4"><CardTitle className="text-sm uppercase tracking-widest">Gestion des commentaires publics</CardTitle></CardHeader>
+              <CardContent className="p-6 space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>Nom de l’auteur</Label>
+                    <Input value={commentAuthor} onChange={e => setCommentAuthor(e.target.value)} placeholder="Jean Kouassi" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Rôle / statut</Label>
+                    <Input value={commentRole} onChange={e => setCommentRole(e.target.value)} placeholder="Client" />
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label>Commentaire</Label>
+                  <Textarea value={commentContent} onChange={e => setCommentContent(e.target.value)} placeholder="Écrivez un témoignage visible sur la page d’accueil…" rows={5} />
+                </div>
+                <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <input type="checkbox" checked={commentActive} onChange={e => setCommentActive(e.target.checked)} />
+                  Publier ce commentaire sur le site
+                </label>
+                <Button className="w-full font-bold uppercase tracking-widest" onClick={saveComment}>
+                  {commentEditingId ? "Enregistrer les modifications" : "Ajouter le commentaire"}
+                </Button>
+                {settingsError && <p className="text-sm text-red-600">{settingsError}</p>}
+              </CardContent>
+            </Card>
+
+            <Card className="border-0 shadow-sm">
+              <CardHeader className="border-b px-5 py-4"><CardTitle className="text-sm uppercase tracking-widest">Commentaires publiés ({commentList.length})</CardTitle></CardHeader>
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader className="bg-gray-50">
+                    <TableRow>
+                      {['Auteur', 'Statut', 'Contenu', 'Actions'].map((h) => (<TableHead key={h} className="text-xs font-bold uppercase tracking-wider">{h}</TableHead>))}
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody className="bg-white">
+                    {commentList.map((comment) => (
+                      <TableRow key={comment.id} className="hover:bg-gray-50">
+                        <TableCell><div className="font-bold text-sm">{comment.authorName}</div><div className="text-xs text-muted-foreground">{comment.role}</div></TableCell>
+                        <TableCell><span className={`text-xs font-bold px-2 py-0.5 rounded-sm ${comment.isActive ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-700'}`}>{comment.isActive ? 'Publié' : 'Masqué'}</span></TableCell>
+                        <TableCell className="max-w-[220px] text-sm text-muted-foreground truncate" title={comment.content}>{comment.content}</TableCell>
+                        <TableCell>
+                          <div className="flex gap-2">
+                            <Button size="sm" variant="outline" className="text-xs" onClick={() => editComment(comment)}>Éditer</Button>
+                            <Button size="sm" variant="destructive" className="text-xs" onClick={() => deleteComment(comment.id)}>Supprimer</Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </Card>
+          </div>
+        )}
+
+        {/* ── UTILISATEURS DÉTAIL ───────────────────────────────── */}
+        {tab === "users" && userDetail && (
+          <Card className="border-0 shadow-sm">
+            <CardHeader className="border-b px-5 py-4"><CardTitle className="text-sm uppercase tracking-widest">Profil utilisateur — {userDetail.user.firstName} {userDetail.user.lastName}</CardTitle></CardHeader>
+            <CardContent className="p-6 grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-3">
+                  <div><Label>Prénom</Label><Input value={userForm.firstName} onChange={(e) => setUserForm({ ...userForm, firstName: e.target.value })} /></div>
+                  <div><Label>Nom</Label><Input value={userForm.lastName} onChange={(e) => setUserForm({ ...userForm, lastName: e.target.value })} /></div>
+                </div>
+                <div><Label>Email</Label><Input value={userForm.email} onChange={(e) => setUserForm({ ...userForm, email: e.target.value })} /></div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div><Label>Indicatif</Label><Input value={userForm.countryCode} onChange={(e) => setUserForm({ ...userForm, countryCode: e.target.value })} /></div>
+                  <div><Label>Téléphone</Label><Input value={userForm.phone} onChange={(e) => setUserForm({ ...userForm, phone: e.target.value })} /></div>
+                </div>
+                <div><Label>Pays</Label><Input value={userForm.country} onChange={(e) => setUserForm({ ...userForm, country: e.target.value })} /></div>
+                <div className="flex gap-2">
+                  <Button className="flex-1" onClick={saveUser}>Enregistrer</Button>
+                  <Button variant="outline" className="flex-1" onClick={() => setUserDetail(null)}>Fermer</Button>
+                </div>
+              </div>
+              <div className="space-y-4 border rounded-lg p-4 bg-gray-50">
+                <div><div className="text-xs uppercase tracking-widest text-muted-foreground">Solde</div><div className="font-bold text-lg">{formatCurrency(userDetail.wallet?.balance ?? 0)} {userDetail.wallet?.currency ?? "FCFA"}</div></div>
+                <div><div className="text-xs uppercase tracking-widest text-muted-foreground">KYC</div><div className="font-medium">{userDetail.kyc ? `${userDetail.kyc.fullName} — ${userDetail.kyc.status}` : "Aucun dossier"}</div></div>
+                <div><div className="text-xs uppercase tracking-widest text-muted-foreground">Date d’inscription</div><div className="font-medium">{new Date(userDetail.user.createdAt).toLocaleString("fr-FR")}</div></div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
         {/* ── VISITES ───────────────────────────────────────────── */}
         {tab === "visits" && visits && (
           <Card className="border-0 shadow-sm overflow-hidden">
@@ -549,7 +834,7 @@ export default function Admin() {
               <Table>
                 <TableHeader className="bg-gray-50 sticky top-0">
                   <TableRow>
-                    {["Date", "IP", "Page", "Utilisateur", "Navigateur"].map(h => (
+                    {["Date", "IP", "Page", "Utilisateur", "Navigateur", "Système", "Appareil", "Localisation"].map(h => (
                       <TableHead key={h} className="text-xs font-bold uppercase tracking-wider">{h}</TableHead>
                     ))}
                   </TableRow>
@@ -562,6 +847,9 @@ export default function Admin() {
                       <TableCell className="font-medium text-primary">{v.page}</TableCell>
                       <TableCell>{v.userId ? `ID: ${v.userId}` : "Anonyme"}</TableCell>
                       <TableCell className="max-w-xs truncate text-muted-foreground" title={v.userAgent}>{v.userAgent}</TableCell>
+                      <TableCell className="text-muted-foreground">{v.os || "—"}</TableCell>
+                      <TableCell className="text-muted-foreground">{v.device || "—"}</TableCell>
+                      <TableCell className="text-muted-foreground">{v.location || "—"}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>

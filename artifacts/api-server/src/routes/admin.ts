@@ -68,6 +68,86 @@ router.get("/admin/users", async (req: Request, res: Response): Promise<void> =>
   res.json(users.map((u) => ({ ...u, walletBalance: parseFloat(u.walletBalance ?? "0") })));
 });
 
+const userUpdateSchema = z.object({
+  firstName: z.string().min(1).optional(),
+  lastName: z.string().min(1).optional(),
+  email: z.string().email().optional(),
+  phone: z.string().min(3).optional(),
+  countryCode: z.string().min(1).optional(),
+  country: z.string().min(1).optional(),
+});
+
+router.get("/admin/users/:id", async (req: Request, res: Response): Promise<void> => {
+  if (!guard(req, res)) return;
+
+  const id = parseInt(String(req.params.id), 10);
+  if (isNaN(id)) { res.status(400).json({ error: "ID invalide." }); return; }
+
+  const [user] = await db.select().from(usersTable).where(eq(usersTable.id, id));
+  if (!user) { res.status(404).json({ error: "Utilisateur introuvable." }); return; }
+
+  const [wallet] = await db.select().from(walletsTable).where(eq(walletsTable.userId, id));
+  const [kyc] = await db.select().from(kycTable).where(eq(kycTable.userId, id)).orderBy(sql`${kycTable.createdAt} DESC`).limit(1);
+
+  res.json({
+    user: {
+      id: user.id,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      email: user.email,
+      phone: user.phone,
+      countryCode: user.countryCode,
+      country: user.country,
+      createdAt: user.createdAt,
+    },
+    wallet: wallet ? { id: wallet.id, balance: parseFloat(wallet.balance), currency: wallet.currency } : null,
+    kyc: kyc ? {
+      id: kyc.id,
+      fullName: kyc.fullName,
+      status: kyc.status,
+      adminNote: kyc.adminNote,
+      createdAt: kyc.createdAt,
+    } : null,
+  });
+});
+
+router.patch("/admin/users/:id", async (req: Request, res: Response): Promise<void> => {
+  if (!guard(req, res)) return;
+
+  const id = parseInt(String(req.params.id), 10);
+  if (isNaN(id)) { res.status(400).json({ error: "ID invalide." }); return; }
+
+  const parsed = userUpdateSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
+
+  const [updated] = await db.update(usersTable)
+    .set(parsed.data)
+    .where(eq(usersTable.id, id))
+    .returning();
+
+  if (!updated) { res.status(404).json({ error: "Utilisateur introuvable." }); return; }
+
+  res.json({ success: true, user: updated });
+});
+
+router.delete("/admin/users/:id", async (req: Request, res: Response): Promise<void> => {
+  if (!guard(req, res)) return;
+
+  const id = parseInt(String(req.params.id), 10);
+  if (isNaN(id)) { res.status(400).json({ error: "ID invalide." }); return; }
+
+  await db.delete(walletsTable).where(eq(walletsTable.userId, id));
+  await db.delete(kycTable).where(eq(kycTable.userId, id));
+  await db.delete(taskCompletionsTable).where(eq(taskCompletionsTable.userId, id));
+  await db.delete(depositsTable).where(eq(depositsTable.userId, id));
+  await db.delete(visitsTable).where(eq(visitsTable.userId, id));
+  const [deleted] = await db.delete(usersTable).where(eq(usersTable.id, id)).returning();
+
+  if (!deleted) { res.status(404).json({ error: "Utilisateur introuvable." }); return; }
+
+  res.json({ success: true, id });
+});
+
 // ─── VISITES ───────────────────────────────────────────────────────────────
 router.get("/admin/visits", async (req: Request, res: Response): Promise<void> => {
   if (!guard(req, res)) return;

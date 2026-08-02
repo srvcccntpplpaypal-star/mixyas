@@ -4,9 +4,11 @@ export const API_BASE = `${BASE}/api`;
 
 export async function apiFetch<T = unknown>(path: string, options?: RequestInit): Promise<T> {
   const token = localStorage.getItem("authToken");
+  const adminKey = localStorage.getItem("adminAuthKey");
   const isFormData = options?.body instanceof FormData;
   const headers: Record<string, string> = {
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(adminKey ? { "x-admin-key": adminKey } : {}),
     ...(!isFormData ? { "Content-Type": "application/json" } : {}),
     ...(options?.headers as Record<string, string> ?? {}),
   };

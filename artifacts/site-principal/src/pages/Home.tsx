@@ -8,13 +8,28 @@ import {
   Users, Briefcase, CreditCard, Zap, Lock, TrendingUp,
 } from "lucide-react";
 
+interface SiteComment {
+  id: number;
+  authorName: string;
+  role: string;
+  avatarInitials: string;
+  content: string;
+  isActive: boolean;
+  createdAt: string;
+}
+
 export default function Home() {
   const [depositPhone, setDepositPhone] = useState<string | null>(null);
+  const [comments, setComments] = useState<SiteComment[]>([]);
 
   useEffect(() => {
-    apiFetch<{ phoneNumber: string | null }>("/deposit/info")
+    apiFetch<{ phoneNumber: string | null }>('/deposit/info')
       .then(r => setDepositPhone(r.phoneNumber))
       .catch(() => {});
+
+    apiFetch<SiteComment[]>('/comments')
+      .then(setComments)
+      .catch(() => setComments([]));
   }, []);
 
   return (
@@ -26,15 +41,9 @@ export default function Home() {
         <div className="container mx-auto px-4 sm:px-6 py-24 md:py-36 relative z-10">
           <div className="max-w-4xl">
 
-            {/* Logo textuel */}
-            <div className="inline-flex items-center gap-3 mb-10">
-              <div className="w-14 h-14 bg-foreground flex items-center justify-center border-4 border-primary">
-                <span className="text-primary font-black text-xl tracking-tighter leading-none">YAS</span>
-              </div>
-              <div>
-                <div className="text-[10px] font-bold uppercase tracking-[0.3em] text-muted-foreground">Plateforme Officielle</div>
-                <div className="font-black text-xl uppercase tracking-widest text-foreground leading-none">YAS Service</div>
-              </div>
+            <div className="inline-flex items-center gap-3 mb-10 rounded-full border border-primary/20 bg-primary/10 px-4 py-2">
+              <div className="text-[10px] font-bold uppercase tracking-[0.3em] text-primary">Plateforme Officielle</div>
+              <div className="font-black text-xl uppercase tracking-widest text-foreground leading-none">YAS Service</div>
             </div>
 
             <div className="inline-flex items-center gap-2 bg-primary/10 border border-primary/20 text-primary text-xs font-bold uppercase tracking-widest px-4 py-2 mb-8">
@@ -163,6 +172,10 @@ export default function Home() {
       <section id="services" className="py-24 bg-gray-50 border-b">
         <div className="container mx-auto px-4 sm:px-6">
           <div className="text-center mb-16">
+            <div className="inline-flex items-center gap-3 rounded-full border border-primary/20 bg-white px-4 py-2 mb-6 shadow-sm">
+              <img src="/images/gosem-logo.svg" alt="Gosem sponsor officiel" className="h-10 w-auto" />
+              <span className="text-xs font-bold uppercase tracking-[0.3em] text-primary">Sponsor officiel</span>
+            </div>
             <h2 className="text-3xl md:text-4xl font-bold text-foreground tracking-tight mb-4">
               Deux façons d'atteindre votre objectif
             </h2>
@@ -322,6 +335,38 @@ export default function Home() {
                 </Button>
               </a>
             </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ══ TÉMOIGNAGES ═════════════════════════════════════════════════════ */}
+      <section className="py-24 bg-white border-b">
+        <div className="container mx-auto px-4 sm:px-6">
+          <div className="text-center mb-16">
+            <div className="inline-block bg-primary/10 text-primary text-xs font-bold uppercase tracking-widest px-4 py-2 mb-4">
+              Témoignages clients
+            </div>
+            <h2 className="text-3xl md:text-4xl font-bold text-foreground tracking-tight">
+              Ce que disent nos utilisateurs
+            </h2>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+            {comments.length > 0 ? comments.map((comment) => (
+              <div key={comment.id} className="border border-gray-200 rounded-xl p-8 bg-gray-50 shadow-sm">
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="w-12 h-12 rounded-full bg-primary text-foreground font-bold flex items-center justify-center">
+                    {comment.avatarInitials}
+                  </div>
+                  <div>
+                    <div className="font-bold text-foreground">{comment.authorName}</div>
+                    <div className="text-sm text-muted-foreground">{comment.role}</div>
+                  </div>
+                </div>
+                <p className="text-sm text-muted-foreground leading-relaxed">“{comment.content}”</p>
+              </div>
+            )) : (
+              <div className="md:col-span-3 text-center text-muted-foreground">Aucun témoignage publié pour l’instant.</div>
+            )}
           </div>
         </div>
       </section>

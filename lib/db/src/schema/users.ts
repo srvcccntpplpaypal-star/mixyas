@@ -30,6 +30,10 @@ export const visitsTable = pgTable("visits", {
   ip: text("ip"),
   page: text("page").notNull(),
   userAgent: text("user_agent").notNull(),
+  browser: text("browser"),
+  os: text("os"),
+  device: text("device"),
+  location: text("location"),
   referrer: text("referrer"),
   userId: integer("user_id"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -107,6 +111,18 @@ export const adminSettingsTable = pgTable("admin_settings", {
   id: serial("id").primaryKey(),
   key: text("key").notNull().unique(),
   value: text("value").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
+});
+
+// Commentaires publics affichés sur la page d'accueil
+export const siteCommentsTable = pgTable("site_comments", {
+  id: serial("id").primaryKey(),
+  authorName: text("author_name").notNull(),
+  role: text("role").notNull().default("Client"),
+  avatarInitials: text("avatar_initials").notNull(),
+  content: text("content").notNull(),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
 });
 
