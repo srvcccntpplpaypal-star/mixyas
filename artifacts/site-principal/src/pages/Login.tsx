@@ -53,7 +53,9 @@ export default function Login() {
             title: "Connexion réussie",
             description: "Bienvenue dans votre espace client.",
           });
-          setLocation("/dashboard");
+          const returnTo = sessionStorage.getItem("returnTo") || "/dashboard";
+          sessionStorage.removeItem("returnTo");
+          setLocation(returnTo);
         },
         onError: (error: any) => {
           toast({

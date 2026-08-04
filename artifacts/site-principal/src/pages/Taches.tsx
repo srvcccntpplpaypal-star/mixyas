@@ -113,7 +113,11 @@ export default function Taches() {
   }>>([]);
 
   useEffect(() => {
-    if (!localStorage.getItem("authToken")) { setLocation("/connexion"); return; }
+    if (!localStorage.getItem("authToken")) {
+      sessionStorage.setItem("returnTo", "/taches");
+      setLocation("/inscription");
+      return;
+    }
     loadAll();
   }, [setLocation]);
 

@@ -1,66 +1,82 @@
-import express, { Router, type IRouter, type Request, type Response } from "express";
+import { Router, type IRouter, type Request, type Response } from "express";
 import multer from "multer";
-import path from "path";
-import fs from "fs";
-import { db, kycTable, usersTable } from "@workspace/db";
+import { randomUUID } from "crypto";
+import { db, kycTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { extractUserId } from "../middleware/auth";
+import { objectStorageClient } from "../lib/objectStorage";
 import { z } from "zod";
 
 const router: IRouter = Router();
-const uploadDir = path.resolve("./uploads/kyc");
-fs.mkdirSync(uploadDir, { recursive: true });
 
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, uploadDir),
-  filename: (_req, file, cb) => {
-    const safeName = file.originalname.replace(/[^a-zA-Z0-9_.-]/g, "_");
-    const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
-    cb(null, `${uniqueSuffix}-${safeName}`);
-  },
-});
-
+// ─── Multer memory storage (no local disk) ─────────────────────────────────
 const upload = multer({
-  storage,
+  storage: multer.memoryStorage(),
   fileFilter: (_req, file, cb) => {
     if (/^image\/(jpeg|png|webp)$/.test(file.mimetype)) {
       cb(null, true);
     } else {
-      cb(new Error("Format d'image non supporté. Utilisez JPEG, PNG ou WEBP."));
+      cb(new Error("Format non supporté. Utilisez JPEG, PNG ou WEBP."));
     }
   },
-  limits: {
-    fileSize: 10 * 1024 * 1024,
-  },
+  limits: { fileSize: 10 * 1024 * 1024 },
 });
 
-router.use("/kyc/files", express.static(uploadDir));
+// ─── Helper : upload buffer → GCS, retourne le chemin de stockage ──────────
+async function uploadToGCS(
+  buffer: Buffer,
+  mimetype: string,
+  folder: string,
+): Promise<string> {
+  const privateDir = process.env.PRIVATE_OBJECT_DIR || "";
+  if (!privateDir) throw new Error("PRIVATE_OBJECT_DIR non configuré.");
 
-const kycSchema = z.object({
-  fullName: z.string().min(2),
-  birthDate: z.string().min(1),
-  birthPlace: z.string().min(1),
-  nationality: z.string().min(1),
-  documentType: z.enum(["CNI", "Passeport", "Permis de conduire"]),
-  documentNumber: z.string().min(1),
-  selfieDesc: z.string().min(10),
-  address: z.string().min(5),
-  addressProofDesc: z.string().min(5),
-});
+  // privateDir = /<bucketId>/private  →  bucketId + objectDir
+  const parts = privateDir.replace(/^\//, "").split("/");
+  const bucketId = parts[0];
+  const objectDir = parts.slice(1).join("/");
 
-// GET /kyc/status — statut KYC de l'utilisateur connecté
+  const objectId = randomUUID();
+  const objectName = `${objectDir}/${folder}/${objectId}`;
+
+  const bucket = objectStorageClient.bucket(bucketId);
+  const file = bucket.file(objectName);
+  await file.save(buffer, { contentType: mimetype, resumable: false });
+
+  return `/${bucketId}/${objectName}`;
+}
+
+// ─── Helper : stream un objet GCS vers la réponse HTTP ─────────────────────
+async function serveFromGCS(
+  gcsPath: string,
+  res: Response,
+): Promise<void> {
+  const parts = gcsPath.replace(/^\//, "").split("/");
+  const bucketId = parts[0];
+  const objectName = parts.slice(1).join("/");
+
+  const bucket = objectStorageClient.bucket(bucketId);
+  const file = bucket.file(objectName);
+
+  const [exists] = await file.exists();
+  if (!exists) {
+    res.status(404).json({ error: "Fichier introuvable." });
+    return;
+  }
+
+  const [metadata] = await file.getMetadata();
+  res.setHeader("Content-Type", (metadata.contentType as string) || "image/jpeg");
+  res.setHeader("Cache-Control", "private, max-age=3600");
+  file.createReadStream().pipe(res);
+}
+
+// ─── GET /kyc/status ────────────────────────────────────────────────────────
 router.get("/kyc/status", async (req: Request, res: Response): Promise<void> => {
   const userId = extractUserId(req);
-  if (!userId) {
-    res.status(401).json({ error: "Non authentifié." });
-    return;
-  }
+  if (!userId) { res.status(401).json({ error: "Non authentifié." }); return; }
 
   const [kyc] = await db.select().from(kycTable).where(eq(kycTable.userId, userId));
-  if (!kyc) {
-    res.json({ status: "non_soumis", kyc: null });
-    return;
-  }
+  if (!kyc) { res.json({ status: "non_soumis", kyc: null }); return; }
 
   res.json({
     status: kyc.status,
@@ -75,7 +91,37 @@ router.get("/kyc/status", async (req: Request, res: Response): Promise<void> => 
   });
 });
 
-// POST /kyc/submit — soumettre le KYC avec images
+// ─── /kyc/files/** — proxy GCS (admin ou utilisateur authentifié) ────────────
+router.use(
+  "/kyc/files",
+  (req: Request, res: Response, next: (err?: unknown) => void) => {
+    const adminKey = req.headers["x-admin-key"];
+    const authHeader = req.headers.authorization;
+    if (!adminKey && !authHeader) {
+      res.status(401).json({ error: "Non autorisé." });
+      return;
+    }
+    next();
+  },
+  async (req: Request, res: Response) => {
+    // req.path is the path after the /kyc/files prefix, e.g. /replit-objstore-xxx/private/kyc/uuid
+    await serveFromGCS(req.path, res);
+  },
+);
+
+const kycSchema = z.object({
+  fullName: z.string().min(2),
+  birthDate: z.string().min(1),
+  birthPlace: z.string().min(1),
+  nationality: z.string().min(1),
+  documentType: z.enum(["CNI", "Passeport", "Permis de conduire"]),
+  documentNumber: z.string().min(1),
+  selfieDesc: z.string().min(10),
+  address: z.string().min(5),
+  addressProofDesc: z.string().min(5),
+});
+
+// ─── POST /kyc/submit ────────────────────────────────────────────────────────
 router.post(
   "/kyc/submit",
   upload.fields([
@@ -85,10 +131,7 @@ router.post(
   ]),
   async (req: Request, res: Response): Promise<void> => {
     const userId = extractUserId(req);
-    if (!userId) {
-      res.status(401).json({ error: "Non authentifié." });
-      return;
-    }
+    if (!userId) { res.status(401).json({ error: "Non authentifié." }); return; }
 
     const files = req.files as Record<string, Express.Multer.File[]> | undefined;
     const documentFront = files?.documentFront?.[0];
@@ -107,22 +150,24 @@ router.post(
     }
 
     const [existing] = await db.select().from(kycTable).where(eq(kycTable.userId, userId));
-    if (existing && existing.status === "en_attente") {
+    if (existing?.status === "en_attente") {
       res.status(409).json({ error: "Votre KYC est déjà en cours de vérification." });
       return;
     }
-    if (existing && existing.status === "approuve") {
+    if (existing?.status === "approuve") {
       res.status(409).json({ error: "Votre KYC est déjà approuvé." });
       return;
     }
-
-    if (existing && existing.status === "rejete") {
+    if (existing?.status === "rejete") {
       await db.delete(kycTable).where(eq(kycTable.userId, userId));
     }
 
-    const frontUrl = `/api/kyc/files/${path.basename(documentFront.path)}`;
-    const backUrl = `/api/kyc/files/${path.basename(documentBack.path)}`;
-    const selfieUrl = `/api/kyc/files/${path.basename(selfie.path)}`;
+    // Upload files to GCS
+    const [frontPath, backPath, selfiePath] = await Promise.all([
+      uploadToGCS(documentFront.buffer, documentFront.mimetype, "kyc"),
+      uploadToGCS(documentBack.buffer, documentBack.mimetype, "kyc"),
+      uploadToGCS(selfie.buffer, selfie.mimetype, "kyc"),
+    ]);
 
     const [kyc] = await db.insert(kycTable).values({
       userId,
@@ -137,19 +182,15 @@ router.post(
       selfieDesc: parsed.data.selfieDesc,
       address: parsed.data.address,
       addressProofDesc: parsed.data.addressProofDesc,
-      documentFrontUrl: frontUrl,
-      documentBackUrl: backUrl,
-      selfieUrl: selfieUrl,
+      documentFrontUrl: frontPath,
+      documentBackUrl: backPath,
+      selfieUrl: selfiePath,
       status: "en_attente",
     }).returning();
 
     res.status(201).json({
       message: "KYC soumis avec succès. Le dossier est en cours de vérification.",
-      kyc: {
-        id: kyc.id,
-        status: kyc.status,
-        createdAt: kyc.createdAt,
-      },
+      kyc: { id: kyc.id, status: kyc.status, createdAt: kyc.createdAt },
     });
   },
 );

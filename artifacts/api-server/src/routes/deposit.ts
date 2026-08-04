@@ -1,52 +1,72 @@
-import express, { Router, type IRouter, type Request, type Response } from "express";
+import { Router, type IRouter, type Request, type Response } from "express";
 import multer from "multer";
-import path from "path";
-import fs from "fs";
+import { randomUUID } from "crypto";
 import { db, depositsTable, adminSettingsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { extractUserId } from "../middleware/auth";
+import { objectStorageClient } from "../lib/objectStorage";
 import { z } from "zod";
 
 const router: IRouter = Router();
-const uploadDir = path.resolve("./uploads/deposits");
-fs.mkdirSync(uploadDir, { recursive: true });
 
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, uploadDir),
-  filename: (_req, file, cb) => {
-    const safeName = file.originalname.replace(/[^a-zA-Z0-9_.-]/g, "_");
-    const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
-    cb(null, `${uniqueSuffix}-${safeName}`);
-  },
-});
-
+// ─── Multer memory storage (no local disk) ─────────────────────────────────
 const upload = multer({
-  storage,
+  storage: multer.memoryStorage(),
   fileFilter: (_req, file, cb) => {
     if (/^image\/(jpeg|png|webp)$/.test(file.mimetype)) {
       cb(null, true);
     } else {
-      cb(new Error("Format d'image non supporté. Utilisez JPEG, PNG ou WEBP."));
+      cb(new Error("Format non supporté. Utilisez JPEG, PNG ou WEBP."));
     }
   },
   limits: { fileSize: 8 * 1024 * 1024 },
 });
 
-router.use((err: unknown, _req: Request, res: Response, _next: (err?: unknown) => void) => {
-  if (err instanceof multer.MulterError) {
-    res.status(400).json({ error: err.message });
+// ─── Helper : upload buffer → GCS, retourne le chemin de stockage ──────────
+async function uploadToGCS(
+  buffer: Buffer,
+  mimetype: string,
+  folder: string,
+): Promise<string> {
+  const privateDir = process.env.PRIVATE_OBJECT_DIR || "";
+  if (!privateDir) throw new Error("PRIVATE_OBJECT_DIR non configuré.");
+
+  const parts = privateDir.replace(/^\//, "").split("/");
+  const bucketId = parts[0];
+  const objectDir = parts.slice(1).join("/");
+
+  const objectId = randomUUID();
+  const objectName = `${objectDir}/${folder}/${objectId}`;
+
+  const bucket = objectStorageClient.bucket(bucketId);
+  const file = bucket.file(objectName);
+  await file.save(buffer, { contentType: mimetype, resumable: false });
+
+  return `/${bucketId}/${objectName}`;
+}
+
+// ─── Helper : stream un objet GCS vers la réponse HTTP ─────────────────────
+async function serveFromGCS(gcsPath: string, res: Response): Promise<void> {
+  const parts = gcsPath.replace(/^\//, "").split("/");
+  const bucketId = parts[0];
+  const objectName = parts.slice(1).join("/");
+
+  const bucket = objectStorageClient.bucket(bucketId);
+  const file = bucket.file(objectName);
+
+  const [exists] = await file.exists();
+  if (!exists) {
+    res.status(404).json({ error: "Fichier introuvable." });
     return;
   }
 
-  if (err instanceof Error) {
-    res.status(400).json({ error: err.message });
-    return;
-  }
+  const [metadata] = await file.getMetadata();
+  res.setHeader("Content-Type", (metadata.contentType as string) || "image/jpeg");
+  res.setHeader("Cache-Control", "private, max-age=3600");
+  file.createReadStream().pipe(res);
+}
 
-  res.status(500).json({ error: "Erreur inattendue lors du téléversement." });
-});
-
-// GET /deposit/info — numéro de dépôt défini par l'admin (public)
+// ─── GET /deposit/info — numéro de dépôt (public) ───────────────────────────
 router.get("/deposit/info", async (req: Request, res: Response): Promise<void> => {
   try {
     const [setting] = await db
@@ -71,11 +91,28 @@ router.get("/deposit/info", async (req: Request, res: Response): Promise<void> =
   }
 });
 
+// ─── /deposit/proof/** — proxy GCS (admin only) ──────────────────────────────
+router.use(
+  "/deposit/proof",
+  (req: Request, res: Response, next: (err?: unknown) => void) => {
+    const adminKey = req.headers["x-admin-key"];
+    const authHeader = req.headers.authorization;
+    if (!adminKey && !authHeader) {
+      res.status(401).json({ error: "Non autorisé." });
+      return;
+    }
+    next();
+  },
+  async (req: Request, res: Response) => {
+    await serveFromGCS(req.path, res);
+  },
+);
+
 const depositSchema = z.object({
   referenceCode: z.string().min(3, "Le code de transaction est requis."),
 });
 
-// POST /deposit/submit — soumettre un dépôt
+// ─── POST /deposit/submit ────────────────────────────────────────────────────
 router.post("/deposit/submit", upload.single("proofImage"), async (req: Request, res: Response): Promise<void> => {
   const userId = extractUserId(req);
   if (!userId) {
@@ -83,7 +120,7 @@ router.post("/deposit/submit", upload.single("proofImage"), async (req: Request,
     return;
   }
 
-  if (req.file == null) {
+  if (!req.file) {
     res.status(400).json({ error: "Veuillez joindre une preuve de paiement en image." });
     return;
   }
@@ -94,11 +131,15 @@ router.post("/deposit/submit", upload.single("proofImage"), async (req: Request,
     return;
   }
 
+  // Upload proof to GCS
+  const proofPath = await uploadToGCS(req.file.buffer, req.file.mimetype, "deposits");
+
   const [deposit] = await db.insert(depositsTable).values({
     userId,
     amount: "5000.00",
     referenceCode: parsed.data.referenceCode,
     status: "en_attente",
+    proofImageUrl: proofPath,
   }).returning();
 
   res.status(201).json({
@@ -109,13 +150,11 @@ router.post("/deposit/submit", upload.single("proofImage"), async (req: Request,
       status: deposit.status,
       createdAt: deposit.createdAt,
     },
-    proofFile: `/api/deposit/proof/${path.basename(req.file.path)}`,
+    proofFile: proofPath,
   });
 });
 
-router.use("/deposit/proof", express.static(uploadDir));
-
-// GET /deposit/history — historique des dépôts de l'utilisateur
+// ─── GET /deposit/history ────────────────────────────────────────────────────
 router.get("/deposit/history", async (req: Request, res: Response): Promise<void> => {
   const userId = extractUserId(req);
   if (!userId) {

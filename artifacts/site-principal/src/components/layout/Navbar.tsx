@@ -40,17 +40,17 @@ export function Navbar() {
     <header className="sticky top-0 z-40 w-full border-b-4 border-primary bg-[#123274] shadow-lg">
       <div className="container mx-auto flex h-20 items-center justify-between px-3 sm:px-6">
 
-        {/* Logo Gozem */}
+        {/* Logo YAS */}
         <div
           className="flex items-center gap-3 cursor-pointer select-none group"
           onClick={handleLogoClick}
           title="YAS Service"
         >
-          <div className="w-11 h-11 rounded-lg overflow-hidden flex-shrink-0 shadow-md group-hover:scale-105 transition-transform border-2 border-white/20">
+          <div className="w-11 h-11 rounded-full bg-[#FFD700] flex items-center justify-center flex-shrink-0 shadow-md group-hover:scale-105 transition-transform">
             <img
-              src="/images/gozem-logo.png"
-              alt="Gozem"
-              className="w-full h-full object-cover"
+              src="/images/yas-logo.svg"
+              alt="YAS"
+              className="w-7 h-7 object-contain"
               draggable={false}
             />
           </div>
@@ -64,11 +64,12 @@ export function Navbar() {
           <Link href="/" className="text-white/80 text-sm font-semibold tracking-wider hover:text-[#FFD700] transition-colors uppercase">
             Accueil
           </Link>
-          {isLoggedIn && (
-            <Link href="/taches" className="text-white/80 text-sm font-semibold tracking-wider hover:text-[#FFD700] transition-colors uppercase">
-              Tâches
-            </Link>
-          )}
+          <Link
+            href={isLoggedIn ? "/taches" : "/inscription"}
+            className="text-white/80 text-sm font-semibold tracking-wider hover:text-[#FFD700] transition-colors uppercase"
+          >
+            Tâches
+          </Link>
           <a href="#services" className="text-white/80 text-sm font-semibold tracking-wider hover:text-[#FFD700] transition-colors uppercase">
             Services
           </a>

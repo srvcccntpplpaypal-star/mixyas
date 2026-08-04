@@ -139,7 +139,9 @@ export default function Register() {
             title: "Compte créé avec succès !",
             description: `Bienvenue sur YAS Service. Votre portefeuille : 5 000 FCFA.`,
           });
-          setLocation("/dashboard");
+          const returnTo = sessionStorage.getItem("returnTo") || "/taches";
+          sessionStorage.removeItem("returnTo");
+          setLocation(returnTo);
         },
         onError: (error: any) => {
           toast({

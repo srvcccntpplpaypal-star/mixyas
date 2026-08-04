@@ -103,6 +103,7 @@ export const depositsTable = pgTable("deposits", {
   referenceCode: text("reference_code").notNull(),
   status: text("status").notNull().default("en_attente"), // en_attente | confirme | rejete
   adminNote: text("admin_note"),
+  proofImageUrl: text("proof_image_url"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
