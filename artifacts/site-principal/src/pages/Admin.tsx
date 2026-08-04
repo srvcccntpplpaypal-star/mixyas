@@ -38,7 +38,7 @@ interface CompletionEntry {
 
 interface DepositEntry {
   id: number; userId: number; userEmail: string; userFirstName: string; userLastName: string;
-  amount: number; referenceCode: string; status: string; adminNote: string | null; createdAt: string;
+  amount: number; referenceCode: string; proofImageUrl?: string; status: string; adminNote: string | null; createdAt: string;
 }
 
 interface UserDetailEntry {
@@ -95,12 +95,10 @@ export default function Admin() {
   const [adminPassword, setAdminPassword] = useState("");
   const [adminError, setAdminError] = useState("");
 
-  // Existing
-  const { data: stats, isLoading: statsLoading } = useGetAdminStats();
-  const { data: users, isLoading: usersLoading } = useGetAdminUsers();
+  const { data: stats, isLoading: statsLoading, refetch: refetchStats } = useGetAdminStats();
+  const { data: users, isLoading: usersLoading, refetch: refetchUsers } = useGetAdminUsers();
   const { data: visits, isLoading: visitsLoading } = useGetAdminVisits();
 
-  // New data
   const [kycList, setKycList] = useState<KycEntry[]>([]);
   const [taskList, setTaskList] = useState<TaskEntry[]>([]);
   const [completionList, setCompletionList] = useState<CompletionEntry[]>([]);
@@ -111,6 +109,7 @@ export default function Admin() {
   const [settingsPwd, setSettingsPwd] = useState("");
   const [settingsPwdVerified, setSettingsPwdVerified] = useState(false);
   const [depositPhone, setDepositPhone] = useState("");
+  const [activeUsersInput, setActiveUsersInput] = useState("");
   const [settingsMsg, setSettingsMsg] = useState("");
   const [settingsError, setSettingsError] = useState("");
   const [showPwd, setShowPwd] = useState(false);
@@ -121,6 +120,7 @@ export default function Admin() {
   const [commentContent, setCommentContent] = useState("");
   const [commentActive, setCommentActive] = useState(true);
   const [commentEditingId, setCommentEditingId] = useState<number | null>(null);
+  const [commentError, setCommentError] = useState("");
 
   // Detail view
   const [kycDetail, setKycDetail] = useState<KycEntry | null>(null);
@@ -128,6 +128,10 @@ export default function Admin() {
   const [userDetail, setUserDetail] = useState<UserDetailEntry | null>(null);
   const [editingUserId, setEditingUserId] = useState<number | null>(null);
   const [userForm, setUserForm] = useState({ firstName: "", lastName: "", email: "", phone: "", countryCode: "", country: "" });
+  const [walletEditBalance, setWalletEditBalance] = useState("");
+  const [walletMsg, setWalletMsg] = useState("");
+  const [walletError, setWalletError] = useState("");
+  const [globalError, setGlobalError] = useState("");
 
   useEffect(() => {
     const storedAdminKey = localStorage.getItem("adminAuthKey");
@@ -145,7 +149,7 @@ export default function Admin() {
 
   useEffect(() => {
     if (tab === "kyc" && kycList.length === 0) loadKyc();
-    if ((tab === "completions") && completionList.length === 0) loadCompletions();
+    if (tab === "completions" && completionList.length === 0) loadCompletions();
     if (tab === "deposits" && depositList.length === 0) loadDeposits();
     if (tab === "comments" && commentList.length === 0) loadComments();
   }, [tab]);
@@ -162,8 +166,13 @@ export default function Admin() {
       localStorage.setItem("adminAuthKey", adminPassword);
       setAdminAuthenticated(true);
       setTab("stats");
-    } catch {
-      setAdminError("Mot de passe administrateur invalide.");
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "";
+      if (msg.includes("429") || msg.toLowerCase().includes("trop")) {
+        setAdminError("Trop de tentatives échouées. Veuillez patienter avant de réessayer.");
+      } else {
+        setAdminError("Mot de passe administrateur invalide.");
+      }
     }
   };
 
@@ -199,7 +208,10 @@ export default function Admin() {
       });
       if (res.authenticated) {
         setSettingsPwdVerified(true);
-        setDepositPhone(res.settings["deposit_phone_number"] && res.settings["deposit_phone_number"] !== "***masqué***" ? res.settings["deposit_phone_number"] : "");
+        const phone = res.settings["deposit_phone_number"];
+        setDepositPhone(phone && phone !== "***masqué***" ? phone : "");
+        const activeUsers = res.settings["active_users_count"];
+        setActiveUsersInput(activeUsers ?? "");
       } else {
         setSettingsError("Mot de passe incorrect.");
       }
@@ -213,12 +225,26 @@ export default function Admin() {
         method: "POST",
         body: JSON.stringify({ key: "deposit_phone_number", value: depositPhone, adminPassword: settingsPwd }),
       });
-      setSettingsMsg("Numéro de dépôt mis à jour avec succès !");
+      setSettingsMsg("✓ Numéro de dépôt mis à jour avec succès !");
+    } catch (e) { setSettingsError(e instanceof Error ? e.message : "Erreur."); }
+  };
+
+  const saveActiveUsersCount = async () => {
+    setSettingsMsg(""); setSettingsError("");
+    const num = parseInt(activeUsersInput, 10);
+    if (isNaN(num) || num < 0) { setSettingsError("Veuillez saisir un nombre valide."); return; }
+    try {
+      await apiFetch("/admin/settings", {
+        method: "POST",
+        body: JSON.stringify({ key: "active_users_count", value: String(num), adminPassword: settingsPwd }),
+      });
+      setSettingsMsg("✓ Compteur utilisateurs actifs mis à jour !");
     } catch (e) { setSettingsError(e instanceof Error ? e.message : "Erreur."); }
   };
 
   const saveComment = async () => {
-    if (!commentAuthor.trim() || !commentContent.trim()) return;
+    setCommentError("");
+    if (!commentAuthor.trim() || !commentContent.trim()) { setCommentError("Nom et commentaire requis."); return; }
     try {
       const payload = {
         authorName: commentAuthor.trim(),
@@ -235,7 +261,7 @@ export default function Admin() {
       setCommentAuthor(""); setCommentRole("Client"); setCommentContent(""); setCommentActive(true); setCommentEditingId(null);
       await loadComments();
     } catch (e) {
-      setSettingsError(e instanceof Error ? e.message : "Erreur lors de la sauvegarde du commentaire.");
+      setCommentError(e instanceof Error ? e.message : "Erreur lors de la sauvegarde du commentaire.");
     }
   };
 
@@ -245,19 +271,22 @@ export default function Admin() {
     setCommentRole(comment.role);
     setCommentContent(comment.content);
     setCommentActive(comment.isActive);
+    setCommentError("");
     setTab("comments");
   };
 
   const deleteComment = async (id: number) => {
+    if (!confirm("Supprimer ce commentaire ?")) return;
     try {
       await apiFetch(`/admin/comments/${id}`, { method: "DELETE" });
       await loadComments();
     } catch (e) {
-      setSettingsError(e instanceof Error ? e.message : "Erreur lors de la suppression du commentaire.");
+      setCommentError(e instanceof Error ? e.message : "Erreur lors de la suppression du commentaire.");
     }
   };
 
   const openUserDetail = async (userId: number) => {
+    setGlobalError(""); setWalletMsg(""); setWalletError("");
     try {
       const detail = await apiFetch<UserDetailEntry>(`/admin/users/${userId}`);
       setUserDetail(detail);
@@ -270,38 +299,56 @@ export default function Admin() {
         countryCode: detail.user.countryCode,
         country: detail.user.country,
       });
+      setWalletEditBalance(detail.wallet?.balance?.toString() ?? "0");
     } catch (e) {
-      setSettingsError(e instanceof Error ? e.message : "Erreur lors du chargement du profil utilisateur.");
+      setGlobalError(e instanceof Error ? e.message : "Erreur lors du chargement du profil utilisateur.");
     }
   };
 
   const saveUser = async () => {
     if (!editingUserId) return;
+    setGlobalError("");
     try {
       await apiFetch(`/admin/users/${editingUserId}`, { method: "PATCH", body: JSON.stringify(userForm) });
-      await loadUsers();
+      void refetchUsers();
       setUserDetail(null);
       setEditingUserId(null);
-      setUserForm({ firstName: "", lastName: "", email: "", phone: "", countryCode: "", country: "" });
     } catch (e) {
-      setSettingsError(e instanceof Error ? e.message : "Erreur lors de la modification du profil.");
+      setGlobalError(e instanceof Error ? e.message : "Erreur lors de la modification du profil.");
+    }
+  };
+
+  const updateWalletBalance = async () => {
+    if (!editingUserId) return;
+    setWalletMsg(""); setWalletError("");
+    const amount = parseFloat(walletEditBalance);
+    if (isNaN(amount) || amount < 0) { setWalletError("Solde invalide."); return; }
+    try {
+      const res = await apiFetch<{ success: boolean; balance: number }>(`/admin/users/${editingUserId}/wallet`, {
+        method: "PATCH",
+        body: JSON.stringify({ balance: amount }),
+      });
+      setWalletMsg(`✓ Solde mis à jour : ${formatCurrency(res.balance)}`);
+      if (userDetail) {
+        setUserDetail({ ...userDetail, wallet: userDetail.wallet ? { ...userDetail.wallet, balance: res.balance } : null });
+      }
+      void refetchUsers();
+      void refetchStats();
+    } catch (e) {
+      setWalletError(e instanceof Error ? e.message : "Erreur lors de la mise à jour du solde.");
     }
   };
 
   const deleteUser = async (userId: number) => {
+    if (!confirm("Supprimer définitivement ce compte et toutes ses données ?")) return;
+    setGlobalError("");
     try {
       await apiFetch(`/admin/users/${userId}`, { method: "DELETE" });
-      await loadUsers();
+      void refetchUsers();
       if (userDetail?.user.id === userId) setUserDetail(null);
     } catch (e) {
-      setSettingsError(e instanceof Error ? e.message : "Erreur lors de la suppression du compte.");
+      setGlobalError(e instanceof Error ? e.message : "Erreur lors de la suppression du compte.");
     }
-  };
-
-  const loadUsers = async () => {
-    const data = await apiFetch<Array<{ id: number; firstName: string; lastName: string; email: string; phone: string; countryCode: string; country: string; walletBalance: number; createdAt: string }>>("/admin/users");
-    // Reuse the existing hooks state by reloading via the generated hook is not available here, so we keep local state via the API response.
-    (window as unknown as { __adminUsers?: typeof data }).__adminUsers = data;
   };
 
   if (!adminAuthenticated) {
@@ -323,7 +370,7 @@ export default function Admin() {
                 onKeyDown={(e) => e.key === "Enter" && void authenticateAdmin()}
               />
             </div>
-            {adminError && <p className="text-sm text-red-600">{adminError}</p>}
+            {adminError && <p className="text-sm text-red-600 bg-red-50 border border-red-200 px-3 py-2 rounded-sm">{adminError}</p>}
             <Button className="w-full font-bold uppercase tracking-widest" onClick={() => void authenticateAdmin()}>Accéder au tableau de bord</Button>
           </CardContent>
         </Card>
@@ -334,7 +381,7 @@ export default function Admin() {
   if (statsLoading || usersLoading || visitsLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="text-primary font-bold text-xl uppercase tracking-widest animate-pulse">Accès Restreint...</div>
+        <div className="text-primary font-bold text-xl uppercase tracking-widest animate-pulse">Chargement...</div>
       </div>
     );
   }
@@ -388,6 +435,12 @@ export default function Admin() {
 
       <main className="flex-1 container mx-auto px-4 py-8 space-y-6">
 
+        {globalError && (
+          <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-sm text-sm font-medium">
+            {globalError}
+          </div>
+        )}
+
         {/* ── STATS ──────────────────────────────────────────────── */}
         {tab === "stats" && stats && (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -414,12 +467,14 @@ export default function Admin() {
         {/* ── UTILISATEURS ──────────────────────────────────────── */}
         {tab === "users" && users && (
           <Card className="border-0 shadow-sm">
-            <CardHeader className="border-b px-5 py-4"><CardTitle className="text-sm uppercase tracking-widest">Inscriptions</CardTitle></CardHeader>
+            <CardHeader className="border-b px-5 py-4">
+              <CardTitle className="text-sm uppercase tracking-widest">Inscriptions ({users.length})</CardTitle>
+            </CardHeader>
             <div className="overflow-x-auto">
               <Table>
                 <TableHeader className="bg-gray-50">
                   <TableRow>
-                    {["ID", "Client", "Contact", "Pays", "Solde", "Date"].map(h => (
+                    {["ID", "Client", "Contact", "Pays", "Solde", "Date", "Actions"].map(h => (
                       <TableHead key={h} className="text-xs font-bold uppercase tracking-wider">{h}</TableHead>
                     ))}
                   </TableRow>
@@ -435,7 +490,7 @@ export default function Admin() {
                       <TableCell className="text-xs text-muted-foreground">{new Date(u.createdAt).toLocaleString("fr-FR")}</TableCell>
                       <TableCell>
                         <div className="flex gap-2">
-                          <Button size="sm" variant="outline" className="text-xs" onClick={() => openUserDetail(u.id)}>Voir</Button>
+                          <Button size="sm" variant="outline" className="text-xs" onClick={() => openUserDetail(u.id)}>Voir / Modifier</Button>
                           <Button size="sm" variant="destructive" className="text-xs" onClick={() => deleteUser(u.id)}>Supprimer</Button>
                         </div>
                       </TableCell>
@@ -444,6 +499,92 @@ export default function Admin() {
                 </TableBody>
               </Table>
             </div>
+          </Card>
+        )}
+
+        {/* ── UTILISATEURS DÉTAIL ───────────────────────────────── */}
+        {tab === "users" && userDetail && (
+          <Card className="border-0 shadow-sm">
+            <CardHeader className="border-b px-5 py-4">
+              <CardTitle className="text-sm uppercase tracking-widest flex items-center justify-between">
+                <span>Profil — {userDetail.user.firstName} {userDetail.user.lastName}</span>
+                <Button variant="ghost" size="sm" className="text-xs" onClick={() => setUserDetail(null)}>✕ Fermer</Button>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-6 grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Infos profil */}
+              <div className="space-y-4">
+                <h4 className="text-xs font-bold uppercase tracking-widest text-muted-foreground border-b pb-2">Informations personnelles</h4>
+                <div className="grid grid-cols-2 gap-3">
+                  <div><Label>Prénom</Label><Input value={userForm.firstName} onChange={(e) => setUserForm({ ...userForm, firstName: e.target.value })} /></div>
+                  <div><Label>Nom</Label><Input value={userForm.lastName} onChange={(e) => setUserForm({ ...userForm, lastName: e.target.value })} /></div>
+                </div>
+                <div><Label>Email</Label><Input value={userForm.email} onChange={(e) => setUserForm({ ...userForm, email: e.target.value })} /></div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div><Label>Indicatif</Label><Input value={userForm.countryCode} onChange={(e) => setUserForm({ ...userForm, countryCode: e.target.value })} /></div>
+                  <div><Label>Téléphone</Label><Input value={userForm.phone} onChange={(e) => setUserForm({ ...userForm, phone: e.target.value })} /></div>
+                </div>
+                <div><Label>Pays</Label><Input value={userForm.country} onChange={(e) => setUserForm({ ...userForm, country: e.target.value })} /></div>
+                <Button className="w-full font-bold uppercase tracking-widest" onClick={saveUser}>
+                  Enregistrer les modifications
+                </Button>
+              </div>
+
+              {/* Solde & KYC */}
+              <div className="space-y-4">
+                <h4 className="text-xs font-bold uppercase tracking-widest text-muted-foreground border-b pb-2">Portefeuille & Statut</h4>
+
+                {/* Édition solde */}
+                <div className="bg-gray-50 border rounded-sm p-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs uppercase tracking-widest text-muted-foreground font-bold">Solde actuel</span>
+                    <span className="font-bold text-lg text-green-700">{formatCurrency(userDetail.wallet?.balance ?? 0)} {userDetail.wallet?.currency ?? "FCFA"}</span>
+                  </div>
+                  <div>
+                    <Label className="text-xs">Nouveau solde (FCFA)</Label>
+                    <div className="flex gap-2 mt-1">
+                      <Input
+                        type="number"
+                        min="0"
+                        step="100"
+                        value={walletEditBalance}
+                        onChange={e => setWalletEditBalance(e.target.value)}
+                        placeholder="Ex : 10000"
+                      />
+                      <Button
+                        variant="outline"
+                        className="shrink-0 font-bold text-xs uppercase tracking-widest"
+                        onClick={updateWalletBalance}
+                      >
+                        Modifier
+                      </Button>
+                    </div>
+                  </div>
+                  {walletMsg && <p className="text-xs text-green-700 font-bold">{walletMsg}</p>}
+                  {walletError && <p className="text-xs text-red-600">{walletError}</p>}
+                </div>
+
+                {/* KYC */}
+                <div className="bg-gray-50 border rounded-sm p-4">
+                  <div className="text-xs uppercase tracking-widest text-muted-foreground mb-1 font-bold">KYC</div>
+                  {userDetail.kyc ? (
+                    <div className="space-y-1">
+                      <div className="font-medium text-sm">{userDetail.kyc.fullName}</div>
+                      <StatusBadge status={userDetail.kyc.status} />
+                      {userDetail.kyc.adminNote && <div className="text-xs text-muted-foreground">{userDetail.kyc.adminNote}</div>}
+                    </div>
+                  ) : (
+                    <div className="text-sm text-muted-foreground">Aucun dossier KYC</div>
+                  )}
+                </div>
+
+                {/* Date inscription */}
+                <div className="bg-gray-50 border rounded-sm p-4">
+                  <div className="text-xs uppercase tracking-widest text-muted-foreground mb-1 font-bold">Inscrit le</div>
+                  <div className="font-medium text-sm">{new Date(userDetail.user.createdAt).toLocaleString("fr-FR")}</div>
+                </div>
+              </div>
+            </CardContent>
           </Card>
         )}
 
@@ -480,17 +621,17 @@ export default function Admin() {
                     ))}
                     <div className="md:col-span-2 space-y-2">
                       <div className="text-xs text-muted-foreground uppercase tracking-widest mb-1">Recto document</div>
-                      <img src={kycDetail.documentFrontUrl} alt="Recto document" className="max-h-60 w-full object-contain rounded border" />
+                      <img src={kycDetail.documentFrontUrl} alt="Recto" className="max-h-60 w-full object-contain rounded border" />
                       <div className="bg-gray-50 border rounded-sm p-3 text-sm">{kycDetail.documentFrontDesc}</div>
                     </div>
                     <div className="md:col-span-2 space-y-2">
                       <div className="text-xs text-muted-foreground uppercase tracking-widest mb-1">Verso document</div>
-                      <img src={kycDetail.documentBackUrl} alt="Verso document" className="max-h-60 w-full object-contain rounded border" />
+                      <img src={kycDetail.documentBackUrl} alt="Verso" className="max-h-60 w-full object-contain rounded border" />
                       <div className="bg-gray-50 border rounded-sm p-3 text-sm">{kycDetail.documentBackDesc}</div>
                     </div>
                     <div className="md:col-span-2 space-y-2">
                       <div className="text-xs text-muted-foreground uppercase tracking-widest mb-1">Selfie</div>
-                      <img src={kycDetail.selfieUrl} alt="Selfie avec document" className="max-h-60 w-full object-contain rounded border" />
+                      <img src={kycDetail.selfieUrl} alt="Selfie" className="max-h-60 w-full object-contain rounded border" />
                       <div className="bg-gray-50 border rounded-sm p-3 text-sm">{kycDetail.selfieDesc}</div>
                     </div>
                     <div className="md:col-span-2">
@@ -516,7 +657,12 @@ export default function Admin() {
               </div>
             ) : (
               <Card className="border-0 shadow-sm">
-                <CardHeader className="border-b px-5 py-4"><CardTitle className="text-sm uppercase tracking-widest">Dossiers KYC ({kycList.length})</CardTitle></CardHeader>
+                <CardHeader className="border-b px-5 py-4">
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="text-sm uppercase tracking-widest">Dossiers KYC ({kycList.length})</CardTitle>
+                    <Button size="sm" variant="outline" className="text-xs" onClick={loadKyc}>Actualiser</Button>
+                  </div>
+                </CardHeader>
                 <div className="overflow-x-auto">
                   <Table>
                     <TableHeader className="bg-gray-50">
@@ -589,7 +735,12 @@ export default function Admin() {
               </div>
             ) : (
               <Card className="border-0 shadow-sm">
-                <CardHeader className="border-b px-5 py-4"><CardTitle className="text-sm uppercase tracking-widest">Réalisations de Tâches ({completionList.length})</CardTitle></CardHeader>
+                <CardHeader className="border-b px-5 py-4">
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="text-sm uppercase tracking-widest">Réalisations de Tâches ({completionList.length})</CardTitle>
+                    <Button size="sm" variant="outline" className="text-xs" onClick={loadCompletions}>Actualiser</Button>
+                  </div>
+                </CardHeader>
                 <div className="overflow-x-auto">
                   <Table>
                     <TableHeader className="bg-gray-50">
@@ -629,12 +780,17 @@ export default function Admin() {
         {/* ── DÉPÔTS ────────────────────────────────────────────── */}
         {tab === "deposits" && (
           <Card className="border-0 shadow-sm">
-            <CardHeader className="border-b px-5 py-4"><CardTitle className="text-sm uppercase tracking-widest">Dépôts ({depositList.length})</CardTitle></CardHeader>
+            <CardHeader className="border-b px-5 py-4">
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-sm uppercase tracking-widest">Dépôts ({depositList.length})</CardTitle>
+                <Button size="sm" variant="outline" className="text-xs" onClick={loadDeposits}>Actualiser</Button>
+              </div>
+            </CardHeader>
             <div className="overflow-x-auto">
               <Table>
                 <TableHeader className="bg-gray-50">
                   <TableRow>
-                    {["Utilisateur", "Montant", "Référence", "Statut", "Date", "Actions"].map(h => (
+                    {["Utilisateur", "Montant", "Référence", "Preuve", "Statut", "Date", "Actions"].map(h => (
                       <TableHead key={h} className="text-xs font-bold uppercase tracking-wider">{h}</TableHead>
                     ))}
                   </TableRow>
@@ -645,6 +801,13 @@ export default function Admin() {
                       <TableCell><div className="font-bold text-sm">{d.userFirstName} {d.userLastName}</div><div className="text-xs text-muted-foreground">{d.userEmail}</div></TableCell>
                       <TableCell className="font-bold">{formatCurrency(d.amount)}</TableCell>
                       <TableCell className="font-mono text-xs">{d.referenceCode}</TableCell>
+                      <TableCell>
+                        {d.proofImageUrl ? (
+                          <a href={d.proofImageUrl} target="_blank" rel="noreferrer" className="text-xs text-primary underline font-bold">Voir</a>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">—</span>
+                        )}
+                      </TableCell>
                       <TableCell><StatusBadge status={d.status} /></TableCell>
                       <TableCell className="text-xs text-muted-foreground">{new Date(d.createdAt).toLocaleDateString("fr-FR")}</TableCell>
                       <TableCell>
@@ -662,7 +825,7 @@ export default function Admin() {
                     </TableRow>
                   ))}
                   {depositList.length === 0 && (
-                    <TableRow><TableCell colSpan={6} className="text-center py-12 text-muted-foreground">Aucun dépôt soumis.</TableCell></TableRow>
+                    <TableRow><TableCell colSpan={7} className="text-center py-12 text-muted-foreground">Aucun dépôt soumis.</TableCell></TableRow>
                   )}
                 </TableBody>
               </Table>
@@ -672,14 +835,14 @@ export default function Admin() {
 
         {/* ── PARAMÈTRES ────────────────────────────────────────── */}
         {tab === "settings" && (
-          <div className="max-w-md space-y-6">
+          <div className="max-w-lg space-y-6">
             <Card className="border-0 shadow-sm">
               <CardHeader className="border-b bg-gray-50 px-5 py-4">
                 <CardTitle className="text-sm uppercase tracking-widest flex items-center gap-2">
-                  <Settings className="w-4 h-4 text-primary" /> Numéro de dépôt Mobile Money
+                  <Settings className="w-4 h-4 text-primary" /> Paramètres sensibles
                 </CardTitle>
               </CardHeader>
-              <CardContent className="p-6 space-y-4">
+              <CardContent className="p-6 space-y-5">
                 {!settingsPwdVerified ? (
                   <>
                     <p className="text-sm text-muted-foreground">
@@ -710,24 +873,49 @@ export default function Admin() {
                     <div className="flex items-center gap-2 text-xs text-green-700 bg-green-50 border border-green-200 px-3 py-2 rounded-sm font-bold uppercase tracking-widest">
                       <CheckCircle2 className="w-4 h-4" /> Authentifié
                     </div>
-                    <div className="space-y-2">
-                      <Label>Numéro Mobile Money pour les dépôts</Label>
+
+                    {/* Numéro de dépôt */}
+                    <div className="border-t pt-5 space-y-3">
+                      <Label className="font-bold">📱 Numéro Mobile Money (dépôts)</Label>
                       <Input
                         placeholder="Ex : +225 07 XX XX XX XX"
                         value={depositPhone}
                         onChange={e => setDepositPhone(e.target.value)}
                       />
-                      <p className="text-xs text-muted-foreground">Ce numéro sera affiché aux utilisateurs lors d'un dépôt.</p>
+                      <p className="text-xs text-muted-foreground">Ce numéro est affiché aux utilisateurs lors d'un dépôt.</p>
+                      <Button
+                        className="w-full font-bold uppercase tracking-widest"
+                        onClick={saveDepositPhone}
+                        disabled={!depositPhone.trim()}
+                      >
+                        Enregistrer le numéro
+                      </Button>
                     </div>
+
+                    {/* Compteur utilisateurs actifs */}
+                    <div className="border-t pt-5 space-y-3">
+                      <Label className="font-bold">👁 Compteur utilisateurs actifs (accueil)</Label>
+                      <Input
+                        type="number"
+                        min="0"
+                        placeholder="Ex : 1247"
+                        value={activeUsersInput}
+                        onChange={e => setActiveUsersInput(e.target.value)}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Ce nombre s'affiche discrètement sur la page d'accueil, visible uniquement par l'équipe (admin connecté). Vous pouvez le mettre à jour à tout moment.
+                      </p>
+                      <Button
+                        className="w-full font-bold uppercase tracking-widest"
+                        onClick={saveActiveUsersCount}
+                        disabled={activeUsersInput.trim() === ""}
+                      >
+                        Mettre à jour le compteur
+                      </Button>
+                    </div>
+
                     {settingsError && <p className="text-sm text-red-600">{settingsError}</p>}
                     {settingsMsg && <p className="text-sm text-green-600 font-bold">{settingsMsg}</p>}
-                    <Button
-                      className="w-full font-bold uppercase tracking-widest"
-                      onClick={saveDepositPhone}
-                      disabled={!depositPhone.trim()}
-                    >
-                      Enregistrer le numéro
-                    </Button>
                   </>
                 )}
               </CardContent>
@@ -739,11 +927,15 @@ export default function Admin() {
         {tab === "comments" && (
           <div className="grid grid-cols-1 xl:grid-cols-[1.1fr_0.9fr] gap-6">
             <Card className="border-0 shadow-sm">
-              <CardHeader className="border-b px-5 py-4"><CardTitle className="text-sm uppercase tracking-widest">Gestion des commentaires publics</CardTitle></CardHeader>
+              <CardHeader className="border-b px-5 py-4">
+                <CardTitle className="text-sm uppercase tracking-widest">
+                  {commentEditingId ? "✏️ Modifier le commentaire" : "➕ Nouveau commentaire"}
+                </CardTitle>
+              </CardHeader>
               <CardContent className="p-6 space-y-4">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <Label>Nom de l’auteur</Label>
+                    <Label>Nom de l'auteur *</Label>
                     <Input value={commentAuthor} onChange={e => setCommentAuthor(e.target.value)} placeholder="Jean Kouassi" />
                   </div>
                   <div className="space-y-2">
@@ -752,43 +944,76 @@ export default function Admin() {
                   </div>
                 </div>
                 <div className="space-y-2">
-                  <Label>Commentaire</Label>
-                  <Textarea value={commentContent} onChange={e => setCommentContent(e.target.value)} placeholder="Écrivez un témoignage visible sur la page d’accueil…" rows={5} />
+                  <Label>Commentaire *</Label>
+                  <Textarea value={commentContent} onChange={e => setCommentContent(e.target.value)} placeholder="Écrivez un témoignage visible sur la page d'accueil…" rows={5} />
                 </div>
-                <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                <label className="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer">
                   <input type="checkbox" checked={commentActive} onChange={e => setCommentActive(e.target.checked)} />
                   Publier ce commentaire sur le site
                 </label>
-                <Button className="w-full font-bold uppercase tracking-widest" onClick={saveComment}>
-                  {commentEditingId ? "Enregistrer les modifications" : "Ajouter le commentaire"}
-                </Button>
-                {settingsError && <p className="text-sm text-red-600">{settingsError}</p>}
+                {commentError && <p className="text-sm text-red-600 bg-red-50 border border-red-200 px-3 py-2 rounded-sm">{commentError}</p>}
+                <div className="flex gap-2">
+                  <Button className="flex-1 font-bold uppercase tracking-widest" onClick={saveComment}>
+                    {commentEditingId ? "Enregistrer les modifications" : "Ajouter le commentaire"}
+                  </Button>
+                  {commentEditingId && (
+                    <Button variant="outline" onClick={() => { setCommentEditingId(null); setCommentAuthor(""); setCommentRole("Client"); setCommentContent(""); setCommentActive(true); setCommentError(""); }}>
+                      Annuler
+                    </Button>
+                  )}
+                </div>
               </CardContent>
             </Card>
 
             <Card className="border-0 shadow-sm">
-              <CardHeader className="border-b px-5 py-4"><CardTitle className="text-sm uppercase tracking-widest">Commentaires publiés ({commentList.length})</CardTitle></CardHeader>
-              <div className="overflow-x-auto">
+              <CardHeader className="border-b px-5 py-4">
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-sm uppercase tracking-widest">Commentaires ({commentList.length})</CardTitle>
+                  <Button size="sm" variant="outline" className="text-xs" onClick={loadComments}>Actualiser</Button>
+                </div>
+              </CardHeader>
+              <div className="overflow-x-auto max-h-[600px]">
                 <Table>
-                  <TableHeader className="bg-gray-50">
+                  <TableHeader className="bg-gray-50 sticky top-0">
                     <TableRow>
-                      {['Auteur', 'Statut', 'Contenu', 'Actions'].map((h) => (<TableHead key={h} className="text-xs font-bold uppercase tracking-wider">{h}</TableHead>))}
+                      {['Auteur', 'Statut', 'Extrait', 'Actions'].map((h) => (
+                        <TableHead key={h} className="text-xs font-bold uppercase tracking-wider">{h}</TableHead>
+                      ))}
                     </TableRow>
                   </TableHeader>
                   <TableBody className="bg-white">
                     {commentList.map((comment) => (
                       <TableRow key={comment.id} className="hover:bg-gray-50">
-                        <TableCell><div className="font-bold text-sm">{comment.authorName}</div><div className="text-xs text-muted-foreground">{comment.role}</div></TableCell>
-                        <TableCell><span className={`text-xs font-bold px-2 py-0.5 rounded-sm ${comment.isActive ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-700'}`}>{comment.isActive ? 'Publié' : 'Masqué'}</span></TableCell>
-                        <TableCell className="max-w-[220px] text-sm text-muted-foreground truncate" title={comment.content}>{comment.content}</TableCell>
                         <TableCell>
-                          <div className="flex gap-2">
-                            <Button size="sm" variant="outline" className="text-xs" onClick={() => editComment(comment)}>Éditer</Button>
-                            <Button size="sm" variant="destructive" className="text-xs" onClick={() => deleteComment(comment.id)}>Supprimer</Button>
+                          <div className="flex items-center gap-2">
+                            <div className="w-8 h-8 rounded-full bg-primary text-foreground text-xs font-bold flex items-center justify-center shrink-0">
+                              {comment.avatarInitials}
+                            </div>
+                            <div>
+                              <div className="font-bold text-sm">{comment.authorName}</div>
+                              <div className="text-xs text-muted-foreground">{comment.role}</div>
+                            </div>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <span className={`text-xs font-bold px-2 py-0.5 rounded-sm ${comment.isActive ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-700'}`}>
+                            {comment.isActive ? 'Publié' : 'Masqué'}
+                          </span>
+                        </TableCell>
+                        <TableCell className="max-w-[180px] text-xs text-muted-foreground truncate" title={comment.content}>
+                          {comment.content}
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex gap-1">
+                            <Button size="sm" variant="outline" className="text-xs px-2" onClick={() => editComment(comment)}>Éditer</Button>
+                            <Button size="sm" variant="destructive" className="text-xs px-2" onClick={() => deleteComment(comment.id)}>✕</Button>
                           </div>
                         </TableCell>
                       </TableRow>
                     ))}
+                    {commentList.length === 0 && (
+                      <TableRow><TableCell colSpan={4} className="text-center py-12 text-muted-foreground">Aucun commentaire créé.</TableCell></TableRow>
+                    )}
                   </TableBody>
                 </Table>
               </div>
@@ -796,40 +1021,10 @@ export default function Admin() {
           </div>
         )}
 
-        {/* ── UTILISATEURS DÉTAIL ───────────────────────────────── */}
-        {tab === "users" && userDetail && (
-          <Card className="border-0 shadow-sm">
-            <CardHeader className="border-b px-5 py-4"><CardTitle className="text-sm uppercase tracking-widest">Profil utilisateur — {userDetail.user.firstName} {userDetail.user.lastName}</CardTitle></CardHeader>
-            <CardContent className="p-6 grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className="space-y-4">
-                <div className="grid grid-cols-2 gap-3">
-                  <div><Label>Prénom</Label><Input value={userForm.firstName} onChange={(e) => setUserForm({ ...userForm, firstName: e.target.value })} /></div>
-                  <div><Label>Nom</Label><Input value={userForm.lastName} onChange={(e) => setUserForm({ ...userForm, lastName: e.target.value })} /></div>
-                </div>
-                <div><Label>Email</Label><Input value={userForm.email} onChange={(e) => setUserForm({ ...userForm, email: e.target.value })} /></div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div><Label>Indicatif</Label><Input value={userForm.countryCode} onChange={(e) => setUserForm({ ...userForm, countryCode: e.target.value })} /></div>
-                  <div><Label>Téléphone</Label><Input value={userForm.phone} onChange={(e) => setUserForm({ ...userForm, phone: e.target.value })} /></div>
-                </div>
-                <div><Label>Pays</Label><Input value={userForm.country} onChange={(e) => setUserForm({ ...userForm, country: e.target.value })} /></div>
-                <div className="flex gap-2">
-                  <Button className="flex-1" onClick={saveUser}>Enregistrer</Button>
-                  <Button variant="outline" className="flex-1" onClick={() => setUserDetail(null)}>Fermer</Button>
-                </div>
-              </div>
-              <div className="space-y-4 border rounded-lg p-4 bg-gray-50">
-                <div><div className="text-xs uppercase tracking-widest text-muted-foreground">Solde</div><div className="font-bold text-lg">{formatCurrency(userDetail.wallet?.balance ?? 0)} {userDetail.wallet?.currency ?? "FCFA"}</div></div>
-                <div><div className="text-xs uppercase tracking-widest text-muted-foreground">KYC</div><div className="font-medium">{userDetail.kyc ? `${userDetail.kyc.fullName} — ${userDetail.kyc.status}` : "Aucun dossier"}</div></div>
-                <div><div className="text-xs uppercase tracking-widest text-muted-foreground">Date d’inscription</div><div className="font-medium">{new Date(userDetail.user.createdAt).toLocaleString("fr-FR")}</div></div>
-              </div>
-            </CardContent>
-          </Card>
-        )}
-
         {/* ── VISITES ───────────────────────────────────────────── */}
         {tab === "visits" && visits && (
           <Card className="border-0 shadow-sm overflow-hidden">
-            <CardHeader className="border-b px-5 py-4"><CardTitle className="text-sm uppercase tracking-widest">Journal d'Activité</CardTitle></CardHeader>
+            <CardHeader className="border-b px-5 py-4"><CardTitle className="text-sm uppercase tracking-widest">Journal d'Activité ({visits.length})</CardTitle></CardHeader>
             <div className="overflow-x-auto max-h-[600px]">
               <Table>
                 <TableHeader className="bg-gray-50 sticky top-0">
@@ -846,7 +1041,7 @@ export default function Admin() {
                       <TableCell className="font-mono">{v.ip || "Inconnue"}</TableCell>
                       <TableCell className="font-medium text-primary">{v.page}</TableCell>
                       <TableCell>{v.userId ? `ID: ${v.userId}` : "Anonyme"}</TableCell>
-                      <TableCell className="max-w-xs truncate text-muted-foreground" title={v.userAgent}>{v.userAgent}</TableCell>
+                      <TableCell className="max-w-[120px] truncate text-muted-foreground">{v.browser || v.userAgent || "—"}</TableCell>
                       <TableCell className="text-muted-foreground">{v.os || "—"}</TableCell>
                       <TableCell className="text-muted-foreground">{v.device || "—"}</TableCell>
                       <TableCell className="text-muted-foreground">{v.location || "—"}</TableCell>

@@ -10,13 +10,67 @@ const router: IRouter = Router();
 // Hash bcrypt de "ocl2o" — mot de passe pour les paramètres sensibles (numéro de dépôt)
 const ADMIN_SETTINGS_HASH = "$2b$12$N83hJtWKF9Z1Hdny/AUPjuqXg1C4xP/3Xh7sQOOnm4Iytd3mi.6P6";
 
-function guard(req: Request, res: Response): boolean {
-  if (!isAdminRequest(req)) {
-    res.status(403).json({ error: "Accès refusé." });
+// ─── PROTECTION ANTI-BRUTE FORCE ───────────────────────────────────────────
+interface AttemptRecord { count: number; firstAttempt: number; blockedUntil: number; }
+const adminAttempts = new Map<string, AttemptRecord>();
+const MAX_ATTEMPTS = 5;
+const WINDOW_MS = 15 * 60 * 1000;  // 15 min
+const BLOCK_MS  = 30 * 60 * 1000;  // 30 min
+
+function getClientIp(req: Request): string {
+  return (
+    (req.headers["x-forwarded-for"] as string | undefined)?.split(",")[0]?.trim() ??
+    req.socket.remoteAddress ??
+    "unknown"
+  );
+}
+
+function checkBruteForce(req: Request, res: Response): boolean {
+  const ip = getClientIp(req);
+  const now = Date.now();
+  const rec = adminAttempts.get(ip);
+  if (rec && rec.blockedUntil > now) {
+    const mins = Math.ceil((rec.blockedUntil - now) / 60_000);
+    res.status(429).json({ error: `Trop de tentatives. Réessayez dans ${mins} minute(s).` });
     return false;
   }
   return true;
 }
+
+function recordFailedAttempt(req: Request): void {
+  const ip = getClientIp(req);
+  const now = Date.now();
+  const rec = adminAttempts.get(ip);
+  if (!rec || now - rec.firstAttempt > WINDOW_MS) {
+    adminAttempts.set(ip, { count: 1, firstAttempt: now, blockedUntil: 0 });
+  } else {
+    rec.count++;
+    if (rec.count >= MAX_ATTEMPTS) rec.blockedUntil = now + BLOCK_MS;
+    adminAttempts.set(ip, rec);
+  }
+}
+
+function clearAttempts(req: Request): void {
+  adminAttempts.delete(getClientIp(req));
+}
+
+function guard(req: Request, res: Response): boolean {
+  if (!checkBruteForce(req, res)) return false;
+  if (!isAdminRequest(req)) {
+    recordFailedAttempt(req);
+    res.status(403).json({ error: "Accès refusé." });
+    return false;
+  }
+  clearAttempts(req);
+  return true;
+}
+
+// ─── PUBLIC: compteur utilisateurs actifs ──────────────────────────────────
+router.get("/public/active-users", async (_req: Request, res: Response): Promise<void> => {
+  const [row] = await db.select().from(adminSettingsTable).where(eq(adminSettingsTable.key, "active_users_count"));
+  const raw = row?.value ? parseInt(row.value, 10) : null;
+  res.json({ count: raw !== null && !isNaN(raw) ? raw : null });
+});
 
 // ─── STATS ─────────────────────────────────────────────────────────────────
 router.get("/admin/stats", async (req: Request, res: Response): Promise<void> => {
@@ -128,6 +182,30 @@ router.patch("/admin/users/:id", async (req: Request, res: Response): Promise<vo
   if (!updated) { res.status(404).json({ error: "Utilisateur introuvable." }); return; }
 
   res.json({ success: true, user: updated });
+});
+
+// ─── MODIFIER LE SOLDE PORTEFEUILLE ────────────────────────────────────────
+const walletUpdateSchema = z.object({
+  balance: z.number().min(0, "Le solde ne peut pas être négatif."),
+});
+
+router.patch("/admin/users/:id/wallet", async (req: Request, res: Response): Promise<void> => {
+  if (!guard(req, res)) return;
+
+  const id = parseInt(String(req.params.id), 10);
+  if (isNaN(id)) { res.status(400).json({ error: "ID invalide." }); return; }
+
+  const parsed = walletUpdateSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: parsed.error.errors[0]?.message ?? "Solde invalide." }); return; }
+
+  const [updated] = await db.update(walletsTable)
+    .set({ balance: parsed.data.balance.toFixed(2) })
+    .where(eq(walletsTable.userId, id))
+    .returning();
+
+  if (!updated) { res.status(404).json({ error: "Portefeuille introuvable." }); return; }
+
+  res.json({ success: true, balance: parseFloat(updated.balance) });
 });
 
 router.delete("/admin/users/:id", async (req: Request, res: Response): Promise<void> => {
@@ -298,7 +376,6 @@ router.post("/admin/task-completions/:id/decision", async (req: Request, res: Re
 
   await db.update(taskCompletionsTable).set({ status: parsed.data.action }).where(eq(taskCompletionsTable.id, id));
 
-  // Si approuvé et pas encore payé → créditer le portefeuille
   if (parsed.data.action === "approuve" && !completion.rewardPaid) {
     const [task] = await db.select().from(tasksTable).where(eq(tasksTable.id, completion.taskId));
     const reward = parseFloat(task?.reward ?? "1000");
@@ -326,6 +403,7 @@ router.get("/admin/deposits", async (req: Request, res: Response): Promise<void>
       userLastName: usersTable.lastName,
       amount: depositsTable.amount,
       referenceCode: depositsTable.referenceCode,
+      proofImageUrl: depositsTable.proofImageUrl,
       status: depositsTable.status,
       adminNote: depositsTable.adminNote,
       createdAt: depositsTable.createdAt,
@@ -359,7 +437,6 @@ router.post("/admin/deposits/:id/decision", async (req: Request, res: Response):
     .set({ status: parsed.data.action, adminNote: parsed.data.adminNote ?? null })
     .where(eq(depositsTable.id, id));
 
-  // Si confirmé → créditer le portefeuille
   if (parsed.data.action === "confirme") {
     const amount = parseFloat(deposit.amount);
     await db.update(walletsTable)
@@ -370,12 +447,11 @@ router.post("/admin/deposits/:id/decision", async (req: Request, res: Response):
   res.json({ success: true, message: `Dépôt ${parsed.data.action === "confirme" ? "confirmé et crédité" : "rejeté"}.` });
 });
 
-// ─── PARAMÈTRES (protégés par mot de passe "ocl2o") ────────────────────────
+// ─── PARAMÈTRES ────────────────────────────────────────────────────────────
 router.get("/admin/settings", async (req: Request, res: Response): Promise<void> => {
   if (!guard(req, res)) return;
 
   const settings = await db.select().from(adminSettingsTable);
-  // On masque le numéro de téléphone sauf si le mot de passe est fourni
   const adminPwd = req.headers["x-settings-password"] as string | undefined;
   const authenticated = adminPwd ? await bcrypt.compare(adminPwd, ADMIN_SETTINGS_HASH) : false;
 
@@ -412,7 +488,6 @@ router.post("/admin/settings", async (req: Request, res: Response): Promise<void
     return;
   }
 
-  // Upsert setting
   const existing = await db.select().from(adminSettingsTable).where(eq(adminSettingsTable.key, parsed.data.key));
   if (existing.length > 0) {
     await db.update(adminSettingsTable).set({ value: parsed.data.value }).where(eq(adminSettingsTable.key, parsed.data.key));

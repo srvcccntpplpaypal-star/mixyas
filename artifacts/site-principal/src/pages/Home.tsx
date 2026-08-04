@@ -21,6 +21,10 @@ interface SiteComment {
 export default function Home() {
   const [depositPhone, setDepositPhone] = useState<string | null>(null);
   const [comments, setComments] = useState<SiteComment[]>([]);
+  const [activeUsersCount, setActiveUsersCount] = useState<number | null>(null);
+
+  // Visible uniquement pour l'équipe (admin connecté)
+  const isTeamMember = !!localStorage.getItem("adminAuthKey");
 
   useEffect(() => {
     apiFetch<{ phoneNumber: string | null }>('/deposit/info')
@@ -30,10 +34,25 @@ export default function Home() {
     apiFetch<SiteComment[]>('/comments')
       .then(setComments)
       .catch(() => setComments([]));
+
+    // Compteur actifs — uniquement si équipe
+    if (isTeamMember) {
+      apiFetch<{ count: number | null }>('/public/active-users')
+        .then(r => setActiveUsersCount(r.count))
+        .catch(() => {});
+    }
   }, []);
 
   return (
     <PageWrapper title="Accueil">
+
+      {/* ── BADGE ACTIFS — visible équipe seulement ─────────────────────── */}
+      {isTeamMember && activeUsersCount !== null && (
+        <div className="fixed bottom-5 right-5 z-50 flex items-center gap-2 bg-[#123274]/90 backdrop-blur-sm text-white text-xs font-mono px-3 py-2 rounded-full shadow-xl border border-white/10 select-none pointer-events-none">
+          <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse inline-block" />
+          {activeUsersCount.toLocaleString("fr-FR")} utilisateurs actifs
+        </div>
+      )}
 
       {/* ══ HERO ════════════════════════════════════════════════════════════════ */}
       <section className="relative bg-white border-b overflow-hidden">
@@ -110,7 +129,6 @@ export default function Home() {
             </h2>
           </div>
 
-          {/* Cartes progression */}
           <div className="grid grid-cols-1 md:grid-cols-4 gap-0 border-2 border-gray-100 overflow-hidden">
             {[
               {
@@ -158,7 +176,6 @@ export default function Home() {
             ))}
           </div>
 
-          {/* Flèche finale */}
           <div className="flex justify-center mt-8">
             <div className="bg-foreground text-white px-10 py-5 text-center">
               <div className="text-3xl font-bold text-primary mb-1">10 000 F</div>
@@ -173,7 +190,7 @@ export default function Home() {
         <div className="container mx-auto px-4 sm:px-6">
           <div className="text-center mb-16">
             <div className="inline-flex items-center gap-3 rounded-full border border-primary/20 bg-white px-4 py-2 mb-6 shadow-sm">
-              <img src="/images/gosem-logo.svg" alt="Gosem sponsor officiel" className="h-10 w-auto" />
+              <img src="/images/gozem-logo.png" alt="Gozem sponsor officiel" className="h-10 w-10 rounded-md object-cover" />
               <span className="text-xs font-bold uppercase tracking-[0.3em] text-primary">Sponsor officiel</span>
             </div>
             <h2 className="text-3xl md:text-4xl font-bold text-foreground tracking-tight mb-4">
@@ -321,7 +338,6 @@ export default function Home() {
               </div>
             </div>
             <div className="bg-foreground text-white p-12">
-              {/* Icône textuelle support */}
               <div className="w-16 h-16 bg-primary flex items-center justify-center mb-6">
                 <Globe2 className="w-8 h-8 text-foreground" />
               </div>
@@ -362,10 +378,10 @@ export default function Home() {
                     <div className="text-sm text-muted-foreground">{comment.role}</div>
                   </div>
                 </div>
-                <p className="text-sm text-muted-foreground leading-relaxed">“{comment.content}”</p>
+                <p className="text-sm text-muted-foreground leading-relaxed">"{comment.content}"</p>
               </div>
             )) : (
-              <div className="md:col-span-3 text-center text-muted-foreground">Aucun témoignage publié pour l’instant.</div>
+              <div className="md:col-span-3 text-center text-muted-foreground">Aucun témoignage publié pour l'instant.</div>
             )}
           </div>
         </div>
@@ -410,8 +426,8 @@ export default function Home() {
         <div className="container mx-auto px-4 sm:px-6">
           <div className="flex flex-col md:flex-row justify-between items-center gap-6">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-primary flex items-center justify-center">
-                <span className="text-foreground font-black text-sm tracking-tighter">YAS</span>
+              <div className="w-10 h-10 rounded-md overflow-hidden border border-white/20">
+                <img src="/images/gozem-logo.png" alt="Gozem" className="w-full h-full object-cover" />
               </div>
               <div>
                 <div className="font-bold uppercase tracking-widest text-primary text-sm">YAS Service</div>

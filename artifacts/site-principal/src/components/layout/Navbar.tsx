@@ -6,11 +6,10 @@ export function Navbar() {
   const [_location, setLocation] = useLocation();
   const clickCount = useRef(0);
   const lastClickTime = useRef(0);
-  const [clickHint, setClickHint] = useState(0); // pour feedback visuel discret
+  const [clickHint, setClickHint] = useState(0);
 
   const handleLogoClick = () => {
     const now = Date.now();
-    // Réinitialiser si plus de 1.5s entre les clics
     if (now - lastClickTime.current > 1500) {
       clickCount.current = 1;
     } else {
@@ -19,7 +18,7 @@ export function Navbar() {
     lastClickTime.current = now;
     setClickHint(clickCount.current);
 
-    // 3 clics → espace gestion affiliés (admin)
+    // 3 clics → espace gestion affiliés
     if (clickCount.current === 3) {
       clickCount.current = 0;
       setClickHint(0);
@@ -41,18 +40,17 @@ export function Navbar() {
     <header className="sticky top-0 z-40 w-full border-b-4 border-primary bg-[#123274] shadow-lg">
       <div className="container mx-auto flex h-20 items-center justify-between px-3 sm:px-6">
 
-        {/* Logo YAS */}
+        {/* Logo Gozem */}
         <div
           className="flex items-center gap-3 cursor-pointer select-none group"
           onClick={handleLogoClick}
           title="YAS Service"
         >
-          {/* Logo SVG officiel YAS */}
-          <div className="w-11 h-11 bg-[#FFD700] rounded-full flex items-center justify-center flex-shrink-0 shadow-md group-hover:scale-105 transition-transform">
+          <div className="w-11 h-11 rounded-lg overflow-hidden flex-shrink-0 shadow-md group-hover:scale-105 transition-transform border-2 border-white/20">
             <img
-              src="/images/yas-logo.svg"
-              alt="YAS"
-              className="w-7 h-7 object-contain"
+              src="/images/gozem-logo.png"
+              alt="Gozem"
+              className="w-full h-full object-cover"
               draggable={false}
             />
           </div>
@@ -92,7 +90,7 @@ export function Navbar() {
                 Connexion
               </Link>
               <Link href="/inscription" className="inline-flex">
-                <Button className="bg-[#FFD700] text-[#123274] hover:bg-[#FFD700]/90 font-bold tracking-wider uppercase border-0 text-xs sm:text-sm px-3 sm:px-4 text-xs sm:text-sm px-3 sm:px-4">
+                <Button className="bg-[#FFD700] text-[#123274] hover:bg-[#FFD700]/90 font-bold tracking-wider uppercase border-0 text-xs sm:text-sm px-3 sm:px-4">
                   Ouvrir un compte
                 </Button>
               </Link>
